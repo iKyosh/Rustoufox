@@ -111,7 +111,7 @@ server. `RUSTOUFOX_JUGGLER_DEBUG=1` shows the browser's own output.
 ## Install
 
 ```bash
-cargo install --git https://github.com/iKyosh/Rustoufox --tag v0.1.0-beta.1
+cargo install --git https://github.com/iKyosh/Rustoufox --tag v0.1.0-beta.2
 rustoufox fetch
 ```
 
@@ -119,9 +119,8 @@ Prebuilt binaries for Linux (x86_64), macOS (Apple Silicon) and Windows
 (x86_64) are attached to each [release](https://github.com/iKyosh/Rustoufox/releases).
 Drop `--tag` to build the latest `main`.
 
-The Linux binary needs glibc 2.28 or later (Debian 10, Ubuntu 18.10, RHEL 8).
-The one attached to `v0.1.0-beta.1` needs glibc 2.39: on Debian 12, Ubuntu
-22.04 or RHEL 9, build it with `cargo install` as above.
+The Linux binary needs glibc 2.28 or later (Debian 10, Ubuntu 18.10, RHEL 8),
+from `v0.1.0-beta.2` on. The one attached to `v0.1.0-beta.1` needs glibc 2.39.
 
 On disk, the paired browser takes about 2.4 GB (v156.0.1-beta.38), the
 default GeoIP database 116 MB and fpgen's decompressed `values.dat` about

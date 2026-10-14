@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.2
 
 - `launch_server()` starts Node.js before drawing the identity, so Playwright
   loads meanwhile: the endpoint comes about 0.2 to 0.4 s sooner (#6). With
