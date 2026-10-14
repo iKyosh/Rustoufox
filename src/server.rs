@@ -207,7 +207,47 @@ impl Drop for CamoufoxServer {
     }
 }
 
-fn spawn_server(
+/// Start the Playwright server under Node.js. It loads Playwright, then
+/// waits for its launch options on stdin.
+fn start_node(pin: Option<&[usize]>) -> Result<(Child, ChildStdin)> {
+    let pw = playwright_dir()?;
+    let mut cmd = Command::new(node_path()?);
+    cmd.arg(script_file(data::SERVER_JS)?).arg(&pw).current_dir(&pw);
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+
+    #[cfg(target_os = "linux")]
+    if let Some(cores) = pin.map(<[usize]>::to_vec) {
+        use std::os::unix::process::CommandExt;
+        // The browser inherits the server's mask, so it runs on these cores.
+        unsafe {
+            cmd.pre_exec(move || crate::cpu_affinity::set_current(&cores));
+        }
+    }
+    let mut child = cmd.spawn()?;
+    #[cfg(target_os = "windows")]
+    if let Some(cores) = pin {
+        crate::cpu_affinity::set_process(child.id(), cores);
+    }
+    let _ = &pin;
+
+    match child.stdin.take() {
+        Some(stdin) => Ok((child, stdin)),
+        None => {
+            kill(&mut child);
+            Err(Error::runtime("no stdin for the server"))
+        }
+    }
+}
+
+fn kill(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Hand the launch to a started server and wait for its endpoint.
+fn finish_server(
+    mut child: Child,
+    mut stdin: ChildStdin,
     launch: LaunchConfig,
     server: &ServerOptions,
     virtual_display: Option<VirtualDisplay>,
@@ -223,33 +263,16 @@ fn spawn_server(
         options["host"] = json!(host);
     }
 
-    let pw = playwright_dir()?;
-    let mut cmd = Command::new(node_path()?);
-    cmd.arg(script_file(data::SERVER_JS)?).arg(&pw).current_dir(&pw);
-    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
-
-    let pin =
-        launch.pin_cores.and_then(|n| crate::cpu_affinity::host_cores().map(|c| crate::cpu_affinity::pick(&c, n)));
-    #[cfg(target_os = "linux")]
-    if let Some(cores) = pin.clone() {
-        use std::os::unix::process::CommandExt;
-        // The browser inherits the server's mask, so it runs on these cores.
-        unsafe {
-            cmd.pre_exec(move || crate::cpu_affinity::set_current(&cores));
-        }
+    let stdout = child.stdout.take();
+    let mut server = CamoufoxServer { child, stdin: None, ws_endpoint: String::new(), launch, virtual_display };
+    if let Err(e) = stdin.write_all(format!("{}\n", b64(&options)).as_bytes()).and_then(|()| stdin.flush()) {
+        drop(stdin);
+        server.shutdown();
+        return Err(e.into());
     }
-    let mut child = cmd.spawn()?;
-    #[cfg(target_os = "windows")]
-    if let Some(cores) = &pin {
-        crate::cpu_affinity::set_process(child.id(), cores);
-    }
-    let _ = &pin;
+    server.stdin = Some(stdin);
 
-    let mut stdin = child.stdin.take().ok_or_else(|| Error::runtime("no stdin for the server"))?;
-    stdin.write_all(format!("{}\n", b64(&options)).as_bytes())?;
-    stdin.flush()?;
-
-    let stdout = child.stdout.take().ok_or_else(|| Error::runtime("no stdout for the server"))?;
+    let stdout = stdout.ok_or_else(|| Error::runtime("no stdout for the server"))?;
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut sent = false;
@@ -266,7 +289,6 @@ fn spawn_server(
             println!("{line}");
         }
     });
-    let mut server = CamoufoxServer { child, stdin: Some(stdin), ws_endpoint: String::new(), launch, virtual_display };
     match rx.recv_timeout(Duration::from_secs(180)) {
         Ok(ep) => {
             server.ws_endpoint = ep;
@@ -281,6 +303,17 @@ fn spawn_server(
             )))
         }
     }
+}
+
+fn spawn_server(
+    launch: LaunchConfig,
+    server: &ServerOptions,
+    virtual_display: Option<VirtualDisplay>,
+) -> Result<CamoufoxServer> {
+    let pin =
+        launch.pin_cores.and_then(|n| crate::cpu_affinity::host_cores().map(|c| crate::cpu_affinity::pick(&c, n)));
+    let (child, stdin) = start_node(pin.as_deref())?;
+    finish_server(child, stdin, launch, server, virtual_display)
 }
 
 /// Launch Camoufox behind a Playwright server and return once it listens.
@@ -299,8 +332,24 @@ pub fn launch_server(mut opts: LaunchOptions, server: ServerOptions) -> Result<C
         opts.headless = Headless::Off;
         virtual_display = Some(vd);
     }
-    let launch = launch_options(opts)?;
-    spawn_server(launch, &server, virtual_display)
+    if opts.pin_cpu_cores {
+        // The cores to pin depend on the drawn identity and are applied when
+        // Node is spawned, so this path keeps the sequential order.
+        let launch = launch_options(opts)?;
+        return spawn_server(launch, &server, virtual_display);
+    }
+    // Node spends a while loading Playwright before it reads its options:
+    // start it first and draw the identity meanwhile.
+    let (mut child, stdin) = start_node(None)?;
+    match launch_options(opts) {
+        Ok(launch) => finish_server(child, stdin, launch, &server, virtual_display),
+        Err(e) => {
+            // The waiting server would otherwise wait on stdin forever.
+            drop(stdin);
+            kill(&mut child);
+            Err(e)
+        }
+    }
 }
 
 /// Serve an already built launch.
