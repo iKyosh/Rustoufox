@@ -125,7 +125,7 @@ returns an init script and `newContext()` options that give a context its own
 navigator, screen, WebGL, fonts, voices, audio seed, timezone and WebRTC IP.
 Apply them with `context.addInitScript()` in your client.
 
-The examples run without Playwright (`identity`) and with it (`server`):
+The examples run without Playwright (`identity`, `bench`) and with it (`server`):
 
 ```bash
 cargo run --example identity -- macos
@@ -165,6 +165,65 @@ the canvas rather than risk a mismatch.
   `GetSystemMetrics` on Windows instead of `screeninfo`.
 - Locale tags are validated against the IANA subtag registry
   (`data/language-registry.json`, generated from the `language-tags` package).
+
+## Performance
+
+Measured on 2026-10-14 against the official Python launcher (`camoufox`
+0.5.8 from PyPI, Playwright 1.62), on one 4-core Linux container without a
+GPU, with the same Camoufox build (v156.0.1-beta.38) and the same request: a
+Windows identity, headless, without uBlock Origin. Absolute numbers will
+differ on other machines; the ratios are what to read.
+
+The launcher's own work, averaged over 50 calls after a first, cold one. The
+Python launcher was given the same decompressed `values.dat` as this crate,
+so both read fpgen's values from the same file:
+
+| Operation | Python | Rust | Speed-up |
+|---|---|---|---|
+| Draw an fpgen fingerprint | 28-30 ms | 9-11 ms | about 3x |
+| `launch_options()`, a whole launch's identity, prefs and environment | 30-31 ms | 11-13 ms | about 2.5x |
+| Peak memory of the launcher process | 112 MB | 91 MB | -19% |
+
+With its default install, which reads the values from the zstd archive, the
+Python launcher takes 87-95 ms per `launch_options()`, about 7x this crate.
+
+Launch to a first loaded page, median of five cold launches:
+
+| Step | Python | Rust |
+|---|---|---|
+| Browser ready | 2.0 s | 1.3 s |
+| First page loaded | 3.19 s | 2.73 s |
+
+The 0.45 s gained is Python's import and identity work. The rest is
+Firefox starting, which is the same browser either way, so once it runs each
+page costs the same. The Rust figure also includes starting a Node.js client
+to load the page, which the Python figure does not.
+
+The gain matters when a process draws many identities (many contexts per
+browser, frequent relaunches) or runs on a small machine; for one long-lived
+browser it is negligible.
+
+To reproduce, with a Camoufox executable at `$EXE`:
+
+```bash
+cargo run --release --example bench -- "$EXE" 50
+```
+
+```python
+import time, warnings
+import camoufox
+from camoufox.utils import launch_options
+
+warnings.simplefilter("ignore")
+EXE = "/path/to/camoufox-bin"
+options = dict(os="windows", headless=True, executable_path=EXE,
+               i_know_what_im_doing=True, exclude_addons=[camoufox.DefaultAddons.UBO])
+launch_options(**options)
+start = time.perf_counter()
+for _ in range(50):
+    launch_options(**options)
+print(f"launch_options: {(time.perf_counter() - start) / 50 * 1e3:.1f} ms")
+```
 
 ## Development
 
