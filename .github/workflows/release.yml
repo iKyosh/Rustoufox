@@ -19,8 +19,6 @@ jobs:
             glibc: "2.28"
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -46,20 +44,13 @@ jobs:
           name="rustoufox-$GITHUB_REF_NAME-${{ matrix.target }}"
           mkdir "$name"
           cp README.md LICENSE CHANGELOG.md "$name/"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            cp target/${{ matrix.target }}/release/rustoufox.exe "$name/"
-            7z a "$name.zip" "$name" > /dev/null
-          else
-            cp target/${{ matrix.target }}/release/rustoufox "$name/"
-            tar czf "$name.tar.gz" "$name"
-          fi
+          cp target/${{ matrix.target }}/release/rustoufox "$name/"
+          tar czf "$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           # Only the archives: the staging directory's name also contains dots.
-          path: |
-            rustoufox-*.tar.gz
-            rustoufox-*.zip
+          path: rustoufox-*.tar.gz
 
   release:
     needs: build
@@ -80,4 +71,4 @@ jobs:
           awk -v v="$version" '/^## /{p = ($2 == v); next} p' CHANGELOG.md > notes.md
           flags=()
           case "$version" in *-*) flags+=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip --title "rustoufox $version" --notes-file notes.md --verify-tag "${flags[@]}"
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --title "rustoufox $version" --notes-file notes.md --verify-tag "${flags[@]}"

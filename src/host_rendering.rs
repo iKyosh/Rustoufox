@@ -64,8 +64,8 @@ pub fn set_webgpu(
 
 /// The (vendor, renderer) this machine's Firefox reports with no identity
 /// applied, read from the binary about to launch under the same display.
-/// On Linux and macOS the browser is driven directly over Juggler; on Windows
-/// this needs Node.js and playwright-core. None when the browser has no WebGL.
+/// The browser is driven directly over Juggler, with no Node.js. None when the
+/// browser has no WebGL.
 pub fn host_gpu(executable_path: &str, headless: bool, env: &BTreeMap<String, String>) -> crate::Result<Option<Gpu>> {
     static CACHE: Mutex<Option<HashMap<String, Option<Gpu>>>> = Mutex::new(None);
     let env: BTreeMap<String, String> = env
@@ -77,14 +77,7 @@ pub fn host_gpu(executable_path: &str, headless: bool, env: &BTreeMap<String, St
     if let Some(hit) = CACHE.lock().unwrap().get_or_insert_with(HashMap::new).get(&key) {
         return Ok(hit.clone());
     }
-    #[cfg(unix)]
     let parsed = crate::juggler::read_host_gpu(executable_path, headless, &env)?;
-    #[cfg(not(unix))]
-    let parsed: Value = {
-        let options = serde_json::json!({ "executablePath": executable_path, "headless": headless, "env": env });
-        let output = crate::server::run_node_script(crate::paths::data::HOST_GPU_JS, &options)?;
-        serde_json::from_str(output.trim())?
-    };
     let gpu = parsed.as_array().and_then(|a| Some((a.first()?.as_str()?.to_string(), a.get(1)?.as_str()?.to_string())));
     CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(key, gpu.clone());
     Ok(gpu)

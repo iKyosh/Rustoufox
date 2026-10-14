@@ -57,23 +57,15 @@ fn node_search_dirs(node: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// The directory holding the Node.js executable's `bin` (on Windows, its own directory).
+/// The directory holding the Node.js executable's `bin`.
 fn node_prefix(node: &Path) -> Option<PathBuf> {
-    let node = node.canonicalize().ok()?;
-    let dir = node.parent()?;
-    Some(if cfg!(windows) { dir.to_path_buf() } else { dir.parent()?.to_path_buf() })
+    Some(node.canonicalize().ok()?.parent()?.parent()?.to_path_buf())
 }
 
 /// Where `npm root -g` usually points, without starting npm (~0.2 s): the
 /// prefix from `npm_config_prefix` or `~/.npmrc`, else npm's default.
 fn npm_global_roots(node: &Path) -> Vec<PathBuf> {
-    let modules = |prefix: PathBuf| {
-        if cfg!(windows) {
-            prefix.join("node_modules")
-        } else {
-            prefix.join("lib").join("node_modules")
-        }
-    };
+    let modules = |prefix: PathBuf| prefix.join("lib").join("node_modules");
     let configured = std::env::var_os("npm_config_prefix")
         .or_else(|| std::env::var_os("NPM_CONFIG_PREFIX"))
         .map(PathBuf::from)
@@ -87,14 +79,7 @@ fn npm_global_roots(node: &Path) -> Vec<PathBuf> {
     if let Some(prefix) = configured {
         return vec![modules(prefix)];
     }
-    let mut roots = Vec::new();
-    if cfg!(windows) {
-        if let Some(appdata) = std::env::var_os("APPDATA") {
-            roots.push(modules(PathBuf::from(appdata).join("npm")));
-        }
-    }
-    roots.extend(node_prefix(node).map(modules));
-    roots
+    node_prefix(node).map(modules).into_iter().collect()
 }
 
 /// `dir/package` if it holds a Playwright package, with symlinks resolved as Node does.
@@ -104,7 +89,7 @@ fn package_in(dir: &Path, package: &str) -> Option<PathBuf> {
 }
 
 fn npm_root_global() -> Option<PathBuf> {
-    Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" })
+    Command::new("npm")
         .args(["root", "-g"])
         .stderr(Stdio::null())
         .output()
@@ -180,20 +165,6 @@ fn script_file(script: &str) -> Result<PathBuf> {
 
 fn b64(value: &Value) -> String {
     base64::engine::general_purpose::STANDARD.encode(value.to_string())
-}
-
-/// Run a bundled script with the Playwright directory and base64 JSON options; returns its stdout.
-pub fn run_node_script(script: &str, options: &Value) -> Result<String> {
-    let out = Command::new(node_path()?)
-        .arg(script_file(script)?)
-        .arg(playwright_dir()?)
-        .arg(b64(options))
-        .stdin(Stdio::null())
-        .output()?;
-    if !out.status.success() {
-        return Err(Error::runtime(String::from_utf8_lossy(&out.stderr).trim().to_string()));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 /// Where the server listens.
@@ -293,10 +264,6 @@ fn start_node(pin: Option<&[usize]>) -> Result<(Child, ChildStdin)> {
         }
     }
     let mut child = cmd.spawn()?;
-    #[cfg(target_os = "windows")]
-    if let Some(cores) = pin {
-        crate::cpu_affinity::set_process(child.id(), cores);
-    }
     let _ = &pin;
 
     match child.stdin.take() {

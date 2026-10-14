@@ -113,7 +113,7 @@ pub struct LaunchOptions {
     pub debug: bool,
     /// An existing X display, e.g. ":99".
     pub virtual_display: Option<String>,
-    /// Pin the browser to navigator.hardwareConcurrency cores (Linux, Windows).
+    /// Pin the browser to navigator.hardwareConcurrency cores (Linux).
     pub pin_cpu_cores: bool,
     /// Random canvas and WebGL readback. None: on for another OS or GPU.
     pub canvas_noise: Option<bool>,
@@ -224,31 +224,13 @@ fn host_os_key() -> Option<&'static str> {
 const QUOTA_FIXED_LIMIT_PREF: &str = "dom.quotaManager.temporaryStorage.fixedLimit";
 
 fn disk_total_bytes(path: &Path) -> Option<u64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-        let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
-        if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
-            return None;
-        }
-        Some(s.f_blocks as u64 * s.f_frsize as u64)
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
+        return None;
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut total: u64 = 0;
-        let ok = unsafe {
-            windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
-                wide.as_ptr(),
-                std::ptr::null_mut(),
-                &mut total,
-                std::ptr::null_mut(),
-            )
-        };
-        (ok != 0).then_some(total)
-    }
+    Some(s.f_blocks as u64 * s.f_frsize as u64)
 }
 
 /// Half the capacity of the disk a stock Firefox profile would live on, in KB:
@@ -256,9 +238,6 @@ fn disk_total_bytes(path: &Path) -> Option<u64> {
 fn stock_profile_disk_capacity_kb() -> Option<i64> {
     let home = dirs::home_dir()?;
     let candidates: Vec<PathBuf> = match OS_NAME {
-        "win" => {
-            vec![std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Mozilla")).unwrap_or(home.clone()), home]
-        }
         "mac" => vec![home.join("Library").join("Application Support").join("Firefox"), home],
         _ => vec![home.join(".mozilla"), home],
     };
@@ -310,9 +289,8 @@ fn generate_fontconfig(fontconfig_path: &Path, fonts_dir: &Path, os_dir: &str) -
 }
 
 fn chunk_env(prefix: &str, data: &str, out: &mut BTreeMap<String, String>) {
-    let size = if OS_NAME == "win" { 2047 } else { 32767 };
     let chars: Vec<char> = data.chars().collect();
-    for (i, chunk) in chars.chunks(size).enumerate() {
+    for (i, chunk) in chars.chunks(32767).enumerate() {
         out.insert(format!("{prefix}_{}", i + 1), chunk.iter().collect());
     }
 }
@@ -548,13 +526,7 @@ fn plan_rendering(
                 Err(e) => {
                     // Fail closed: an unknown host GPU is treated as one fpgen never recorded.
                     warnings::runtime(format!(
-                        "Could not read the host GPU ({e}). The canvas is covered as for another machine.{}",
-                        if cfg!(unix) {
-                            ""
-                        } else {
-                            " Install Node.js and playwright-core (or set RUSTOUFOX_PLAYWRIGHT_CORE) to let the \
-                             identity claim this machine's GPU."
-                        }
+                        "Could not read the host GPU ({e}). The canvas is covered as for another machine."
                     ));
                     return Ok((canvas_noise.is_none(), None));
                 }
