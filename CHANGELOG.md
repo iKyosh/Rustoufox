@@ -13,6 +13,11 @@
   many seconds; off by default (#10).
 - The Linux release binary links against glibc 2.28 instead of the runner's
   (2.39), so it runs on Debian 10+, Ubuntu 18.10+ and RHEL 8+ (#11).
+- `playwright-core` is found without starting npm or Node.js: `rustoufox
+  options` and `rustoufox server` reach their output about 0.2 s sooner
+  (#13). npm is still asked when the package is not in the usual places.
+- fpgen's network is parsed straight into its tables instead of through
+  `serde_json::Value`: loading it takes about 65 ms instead of 135 ms (#13).
 - README: the path for Python, Java and .NET clients (#9), `--geoip <IP>`,
   canvas noise, disk footprint and comparing with the Python launcher
   (#12).
