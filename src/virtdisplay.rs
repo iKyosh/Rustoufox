@@ -42,7 +42,6 @@ impl VirtualDisplay {
         Ok(VirtualDisplay { debug, screen: resolve_screen()?, composite, proc: None, display: None })
     }
 
-    #[cfg(unix)]
     fn xvfb_args(&self) -> Vec<String> {
         [
             "-screen",
@@ -84,7 +83,6 @@ impl VirtualDisplay {
         Ok(format!(":{}", self.display.unwrap_or(0)))
     }
 
-    #[cfg(unix)]
     fn start(&mut self) -> Result<()> {
         use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
@@ -169,11 +167,6 @@ impl VirtualDisplay {
                 )))
             }
         }
-    }
-
-    #[cfg(not(unix))]
-    fn start(&mut self) -> Result<()> {
-        Err(Error::VirtualDisplay("Virtual display is only supported on Linux.".into()))
     }
 
     /// Stop Xvfb and remove its lock and socket, whether or not it was still running.

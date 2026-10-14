@@ -5,7 +5,7 @@
 
 /// Whether this host can constrain a process to a subset of its cores.
 pub fn supported() -> bool {
-    cfg!(any(target_os = "linux", target_os = "windows"))
+    cfg!(target_os = "linux")
 }
 
 /// The cores this process may run on, in order.
@@ -46,23 +46,4 @@ pub fn set_current(cores: &[usize]) -> std::io::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Restrict another process to these cores.
-#[cfg(target_os = "windows")]
-pub fn set_process(pid: u32, cores: &[usize]) -> bool {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, SetProcessAffinityMask, PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION,
-    };
-    let mask: usize = cores.iter().fold(0usize, |m, c| m | (1usize << c));
-    unsafe {
-        let h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_SET_INFORMATION, 0, pid);
-        if h.is_null() {
-            return false;
-        }
-        let ok = SetProcessAffinityMask(h, mask) != 0;
-        CloseHandle(h);
-        ok
-    }
 }

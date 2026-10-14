@@ -22,6 +22,9 @@
 //! [`launch_options`] alone builds the Playwright `firefox.launch()` options
 //! without starting anything, for a Playwright you drive yourself.
 
+#[cfg(not(unix))]
+compile_error!("rustoufox runs on Linux and macOS only");
+
 pub mod addons;
 pub mod browser_pin;
 pub mod coherence;

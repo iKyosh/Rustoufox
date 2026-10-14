@@ -12,13 +12,7 @@ use serde::Deserialize;
 use crate::error::{Error, Result};
 
 /// The host OS in the short form the bundled data files use.
-pub const OS_NAME: &str = if cfg!(target_os = "macos") {
-    "mac"
-} else if cfg!(target_os = "windows") {
-    "win"
-} else {
-    "lin"
-};
+pub const OS_NAME: &str = if cfg!(target_os = "macos") { "mac" } else { "lin" };
 
 /// The host architecture in the form the release assets are named with.
 pub const ARCH: &str = if cfg!(target_arch = "x86_64") {
@@ -67,13 +61,7 @@ pub fn check_host() -> Result<()> {
 /// one install directory.
 fn user_cache_dir(app: &str) -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    if cfg!(target_os = "windows") {
-        let base = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .unwrap_or_else(|| home.join("AppData").join("Local"));
-        base.join(app).join(app).join("Cache")
-    } else if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") {
         home.join("Library").join("Caches").join(app)
     } else {
         let xdg = std::env::var("XDG_CACHE_HOME").unwrap_or_default();
@@ -126,7 +114,6 @@ pub mod data {
     pub const SERVER_JS: &str = include_str!("../data/server.js");
     pub const PLAYWRIGHT_PREFS: &str = include_str!("../data/playwright-prefs.json");
     pub const INSPECT_JS: &str = include_str!("../data/inspect.js");
-    pub const HOST_GPU_JS: &str = include_str!("../data/hostGpu.js");
     pub const MEDIA_DEVICES: &str = include_str!("../data/media-devices.json");
     pub const PROPERTIES: &str = include_str!("../data/properties.json");
     pub const REPOS_YML: &str = include_str!("../data/repos.yml");

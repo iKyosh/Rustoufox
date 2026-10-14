@@ -92,7 +92,7 @@ version as the client's Playwright: a mismatch fails at `connect()`.
 `rustoufox::juggler` speaks Juggler directly over the browser's pipe, with no
 Node.js and no Playwright. It covers contexts, pages, `goto`, `evaluate`,
 screenshots, cookies, clicks and text input; it has no selectors,
-auto-waiting or network interception. Linux and macOS only for now.
+auto-waiting or network interception.
 
 ```rust
 use rustoufox::juggler::Browser;
@@ -115,8 +115,9 @@ cargo install --git https://github.com/iKyosh/Rustoufox --tag v0.1.0-beta.2
 rustoufox fetch
 ```
 
-Prebuilt binaries for Linux (x86_64), macOS (Apple Silicon) and Windows
-(x86_64) are attached to each [release](https://github.com/iKyosh/Rustoufox/releases).
+Prebuilt binaries for Linux (x86_64) and macOS (Apple Silicon) are attached
+to each [release](https://github.com/iKyosh/Rustoufox/releases). rustoufox runs
+on Linux and macOS only; it still draws Windows identities.
 Drop `--tag` to build the latest `main`.
 
 The Linux binary needs glibc 2.28 or later (Debian 10, Ubuntu 18.10, RHEL 8),
@@ -217,14 +218,14 @@ cargo run --example server
 
 Canvas and WebGL pixels come from the real machine whatever the identity
 claims. As in the Python launcher, an identity on the host's own OS claims the
-GPU the host renders with, read once from a bare browser (over Juggler on
-Linux and macOS, through Playwright on Windows). An identity on another OS or
+GPU the host renders with, read once from a bare browser over Juggler, with
+no Node.js. An identity on another OS or
 GPU turns on the canvas protection of `privacy.resistFingerprinting` and
 warns. This canvas noise is on by default, which neither the Python launcher
 nor stock Firefox does: to compare the two launchers like for like, set
-`--canvas-noise` (`canvas_noise`) explicitly on both sides. When the host GPU cannot be read (on Windows, no Node.js or
-`playwright-core`), rustoufox treats it as unknown and covers the canvas
-rather than risk a mismatch.
+`--canvas-noise` (`canvas_noise`) explicitly on both sides. When the host GPU
+cannot be read, rustoufox treats it as unknown and covers the canvas rather
+than risk a mismatch.
 
 ## Environment variables
 
@@ -246,8 +247,10 @@ rather than risk a mismatch.
   beyond `launch_server`.
 - fpgen's model is kept in the camoufox data directory, with `values.dat`
   decompressed once (about 200 MB) so values are read with a seek.
-- Monitor size is read with `xrandr` on Linux, `system_profiler` on macOS and
-  `GetSystemMetrics` on Windows instead of `screeninfo`.
+- Monitor size is read with `xrandr` on Linux and `system_profiler` on macOS
+  instead of `screeninfo`.
+- It does not run on Windows (the Python launcher does), though it draws
+  Windows identities like any other.
 - Locale tags are validated against the IANA subtag registry
   (`data/language-registry.json`, generated from the `language-tags` package).
 

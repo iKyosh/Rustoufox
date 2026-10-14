@@ -624,11 +624,7 @@ pub fn ensure_browser_profile_dir(env: Option<&std::collections::BTreeMap<String
     let created = {
         let mut b = fs::DirBuilder::new();
         b.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            b.mode(0o700);
-        }
+        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
         b.create(&dir)
     };
     if created.is_err() || !dir.is_dir() {
@@ -759,7 +755,6 @@ pub fn unzip_from<R: Read + std::io::Seek>(reader: R, dest: &Path, desc: Option<
             }
             let mut f = fs::File::create(&out)?;
             std::io::copy(&mut entry, &mut f)?;
-            #[cfg(unix)]
             if let Some(mode) = entry.unix_mode() {
                 use std::os::unix::fs::PermissionsExt;
                 fs::set_permissions(&out, fs::Permissions::from_mode(mode & 0o7777))?;

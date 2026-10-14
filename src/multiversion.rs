@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 
 use crate::browser_pin;
 use crate::error::Result;
-use crate::paths::{install_dir, rprint, style, OS_NAME};
+use crate::paths::{install_dir, rprint, style};
 use crate::pkgman::{self, AvailableVersion, RepoConfig, Version};
 
 pub fn browsers_dir() -> PathBuf {
@@ -290,20 +290,16 @@ pub fn find_installed_version(specifier: &str) -> Option<PathBuf> {
 }
 
 fn chmod_755(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
-        if path.is_dir() {
-            for entry in fs::read_dir(path)?.flatten() {
-                let p = entry.path();
-                if !p.is_symlink() {
-                    chmod_755(&p)?;
-                }
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    if path.is_dir() {
+        for entry in fs::read_dir(path)?.flatten() {
+            let p = entry.path();
+            if !p.is_symlink() {
+                chmod_755(&p)?;
             }
         }
     }
-    let _ = path;
     Ok(())
 }
 
@@ -356,9 +352,7 @@ pub fn install_versioned(available: &AvailableVersion, replace: bool) -> Result<
         tmp.rewind()?;
         pkgman::unzip_from(std::io::BufReader::new(tmp), &install_path, Some("Extracting"))?;
         fs::write(install_path.join("version.json"), serde_json::to_vec(&available.to_metadata())?)?;
-        if OS_NAME != "win" {
-            chmod_755(&install_path)?;
-        }
+        chmod_755(&install_path)?;
         set_active(&format!("browsers/{repo_name}/{folder}"))?;
         fs::write(compat_flag(), b"")?;
         Ok(())

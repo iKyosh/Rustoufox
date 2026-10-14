@@ -6,7 +6,7 @@
 //! navigation, evaluation in the page's default world, screenshots, cookies
 //! and basic input. It has no selectors, no auto-waiting and no network
 //! interception: for those, use [`crate::launch_server`] and any Playwright
-//! client. Unix only for now (Windows hands the pipe over as handles).
+//! client.
 //!
 //! ```no_run
 //! use rustoufox::juggler::Browser;
@@ -573,7 +573,6 @@ impl Page {
 /// The `[vendor, renderer]` WebGL reports in a bare browser (no identity,
 /// WebGL forced on), or null without WebGL. The host GPU probe of
 /// [`crate::host_rendering::host_gpu`].
-#[cfg(unix)]
 pub(crate) fn read_host_gpu(
     executable_path: &str,
     headless: bool,
@@ -658,7 +657,6 @@ fn write_user_js(dir: &std::path::Path, prefs: &Map<String, Value>) -> Result<()
 
 /// Spawn the browser with the Juggler pipe on fds 3 (browser reads) and 4
 /// (browser writes).
-#[cfg(unix)]
 fn spawn_with_pipe(mut cmd: Command, pin: Option<Vec<usize>>) -> Result<(Child, Arc<Connection>)> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::process::CommandExt;
@@ -703,12 +701,7 @@ fn spawn_with_pipe(mut cmd: Command, pin: Option<Vec<usize>>) -> Result<(Child, 
     Ok((child, conn))
 }
 
-#[cfg(not(unix))]
-fn spawn_with_pipe(_cmd: Command, _pin: Option<Vec<usize>>) -> Result<(Child, Arc<Connection>)> {
-    Err(Error::UnsupportedOs("the native Juggler client runs on Linux and macOS only for now".into()))
-}
-
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::BufRead;
