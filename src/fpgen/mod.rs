@@ -11,12 +11,17 @@
 
 pub mod model;
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use rustc_hash::FxHashMap;
+use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::Deserialize;
+use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 
 use crate::error::{Error, Result};
@@ -50,10 +55,130 @@ type Possibilities = Arc<Vec<(String, u32)>>;
 /// Allowed value ids per node.
 pub type Evidence = HashMap<usize, HashSet<u32>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Cpt {
     Leaf(Vec<(u32, f64)>),
-    Branch(HashMap<u32, Cpt>),
+    Branch(FxHashMap<u32, Cpt>),
+}
+
+/// fingerprint-network.json, borrowing its strings where they have no escapes.
+#[derive(Deserialize)]
+struct RawNetwork<'a> {
+    #[serde(borrow)]
+    nodes: Vec<RawNode<'a>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawNode<'a> {
+    #[serde(borrow, default)]
+    name: Cow<'a, str>,
+    #[serde(borrow, default)]
+    parent_names: Vec<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    possible_values: Vec<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    conditional_probabilities: Option<&'a RawValue>,
+}
+
+/// Value strings by id, and ids by value.
+#[derive(Default)]
+struct Interner {
+    strings: Vec<String>,
+    ids: FxHashMap<String, u32>,
+}
+
+impl Interner {
+    fn intern(&mut self, s: &str) -> u32 {
+        if let Some(id) = self.ids.get(s) {
+            return *id;
+        }
+        let id = self.strings.len() as u32;
+        self.strings.push(s.to_string());
+        self.ids.insert(s.to_string(), id);
+        id
+    }
+}
+
+/// Parses a conditional probability table `depth` parent levels deep. A
+/// level that is not an object is an empty table, and a probability that is
+/// not a number is 0, as when the table went through serde_json::Value.
+struct CptSeed<'i> {
+    depth: usize,
+    interner: &'i mut Interner,
+}
+
+impl CptSeed<'_> {
+    fn empty(depth: usize) -> Cpt {
+        if depth == 0 {
+            Cpt::Leaf(Vec::new())
+        } else {
+            Cpt::Branch(FxHashMap::default())
+        }
+    }
+}
+
+impl<'de> DeserializeSeed<'de> for CptSeed<'_> {
+    type Value = Cpt;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> std::result::Result<Cpt, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for CptSeed<'_> {
+    type Value = Cpt;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a conditional probability table")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<Cpt, A::Error> {
+        if self.depth == 0 {
+            let mut leaf = Vec::new();
+            while let Some(key) = map.next_key::<Cow<'de, str>>()? {
+                let p = map.next_value::<Value>()?;
+                leaf.push((self.interner.intern(&key), p.as_f64().unwrap_or(0.0)));
+            }
+            return Ok(Cpt::Leaf(leaf));
+        }
+        let mut branch = FxHashMap::default();
+        while let Some(key) = map.next_key::<Cow<'de, str>>()? {
+            let id = self.interner.intern(&key);
+            let sub = map.next_value_seed(CptSeed { depth: self.depth - 1, interner: &mut *self.interner })?;
+            branch.insert(id, sub);
+        }
+        Ok(Cpt::Branch(branch))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Cpt, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(CptSeed::empty(self.depth))
+    }
+
+    fn visit_unit<E>(self) -> std::result::Result<Cpt, E> {
+        Ok(CptSeed::empty(self.depth))
+    }
+
+    fn visit_bool<E>(self, _: bool) -> std::result::Result<Cpt, E> {
+        Ok(CptSeed::empty(self.depth))
+    }
+
+    fn visit_i64<E>(self, _: i64) -> std::result::Result<Cpt, E> {
+        Ok(CptSeed::empty(self.depth))
+    }
+
+    fn visit_u64<E>(self, _: u64) -> std::result::Result<Cpt, E> {
+        Ok(CptSeed::empty(self.depth))
+    }
+
+    fn visit_f64<E>(self, _: f64) -> std::result::Result<Cpt, E> {
+        Ok(CptSeed::empty(self.depth))
+    }
+
+    fn visit_str<E>(self, _: &str) -> std::result::Result<Cpt, E> {
+        Ok(CptSeed::empty(self.depth))
+    }
 }
 
 #[derive(Debug)]
@@ -117,7 +242,8 @@ fn casefold(s: &str) -> String {
 impl Network {
     /// Load the network from a model directory.
     pub fn load(dir: &Path) -> Result<Network> {
-        let network: Value = serde_json::from_slice(&model::read_zst(&dir.join("fingerprint-network.json.zst"))?)?;
+        let network = model::read_zst(&dir.join("fingerprint-network.json.zst"))?;
+        let network: RawNetwork = serde_json::from_slice(&network)?;
         let values: Map<String, Value> = serde_json::from_slice(&model::read_zst(&dir.join("values.json.zst"))?)?;
         let pairs = values
             .iter()
@@ -128,54 +254,29 @@ impl Network {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut strings: Vec<String> = Vec::new();
-        let mut ids: HashMap<String, u32> = HashMap::new();
-        let mut intern = |s: &str| -> u32 {
-            if let Some(id) = ids.get(s) {
-                return *id;
-            }
-            let id = strings.len() as u32;
-            strings.push(s.to_string());
-            ids.insert(s.to_string(), id);
-            id
-        };
-
-        let raw_nodes = network["nodes"]
-            .as_array()
-            .ok_or_else(|| Error::FpgenModel("fingerprint-network.json has no nodes".into()))?;
+        let mut interner = Interner::default();
         let mut by_name = HashMap::new();
-        for (i, raw) in raw_nodes.iter().enumerate() {
-            by_name.insert(casefold(raw["name"].as_str().unwrap_or_default()), i);
+        for (i, raw) in network.nodes.iter().enumerate() {
+            by_name.insert(casefold(&raw.name), i);
         }
 
-        fn parse_cpt(v: &Value, depth: usize, intern: &mut dyn FnMut(&str) -> u32) -> Cpt {
-            let obj = v.as_object();
-            if depth == 0 {
-                Cpt::Leaf(
-                    obj.map(|o| o.iter().map(|(k, p)| (intern(k), p.as_f64().unwrap_or(0.0))).collect())
-                        .unwrap_or_default(),
-                )
-            } else {
-                Cpt::Branch(
-                    obj.map(|o| o.iter().map(|(k, sub)| (intern(k), parse_cpt(sub, depth - 1, intern))).collect())
-                        .unwrap_or_default(),
-                )
-            }
+        let mut nodes = Vec::with_capacity(network.nodes.len());
+        for raw in &network.nodes {
+            let parents: Vec<usize> =
+                raw.parent_names.iter().filter_map(|p| by_name.get(&casefold(p)).copied()).collect();
+            let possible: Vec<u32> = raw.possible_values.iter().map(|v| interner.intern(v)).collect();
+            // The table nests one object level per parent; parsed straight
+            // from the raw JSON, it never becomes a serde_json::Value.
+            let cpt = match &raw.conditional_probabilities {
+                Some(table) => {
+                    let mut de = serde_json::Deserializer::from_str(table.get());
+                    CptSeed { depth: parents.len(), interner: &mut interner }.deserialize(&mut de)?
+                }
+                None => CptSeed::empty(parents.len()),
+            };
+            nodes.push(Node { name: raw.name.to_string(), parents, possible, cpt });
         }
-
-        let mut nodes = Vec::with_capacity(raw_nodes.len());
-        for raw in raw_nodes {
-            let parents: Vec<usize> = raw["parentNames"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|p| p.as_str().and_then(|p| by_name.get(&casefold(p)).copied())).collect())
-                .unwrap_or_default();
-            let possible: Vec<u32> = raw["possibleValues"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str()).map(&mut intern).collect())
-                .unwrap_or_default();
-            let cpt = parse_cpt(&raw["conditionalProbabilities"], parents.len(), &mut intern);
-            nodes.push(Node { name: raw["name"].as_str().unwrap_or_default().to_string(), parents, possible, cpt });
-        }
+        let strings = interner.strings;
 
         // Ancestors: a node's parents always come earlier in the sampling order.
         let n = nodes.len();

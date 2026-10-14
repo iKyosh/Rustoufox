@@ -30,16 +30,87 @@ pub fn node_path() -> Result<PathBuf> {
     })
 }
 
-fn resolve_from(node: &Path, cwd: Option<&Path>, package: &str) -> Option<PathBuf> {
-    let script = format!("process.stdout.write(require('path').dirname(require.resolve('{package}/package.json')))");
-    let mut cmd = Command::new(node);
-    cmd.arg("-e").arg(script).stderr(Stdio::null());
-    if let Some(cwd) = cwd {
-        cmd.current_dir(cwd);
+/// Where `require.resolve` from the current directory looks for a package,
+/// in Node's order: `node_modules` in the current directory and each parent,
+/// then `NODE_PATH`, `~/.node_modules`, `~/.node_libraries` and
+/// `<prefix>/lib/node`. Walking them here spares a Node.js start (~0.1 s).
+fn node_search_dirs(node: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        for dir in cwd.ancestors() {
+            if dir.file_name().is_some_and(|n| n == "node_modules") {
+                continue;
+            }
+            dirs.push(dir.join("node_modules"));
+        }
     }
-    let out = cmd.output().ok()?;
-    let dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-    (out.status.success() && dir.join("index.js").exists()).then_some(dir)
+    if let Some(paths) = std::env::var_os("NODE_PATH") {
+        dirs.extend(std::env::split_paths(&paths).filter(|p| !p.as_os_str().is_empty()));
+    }
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".node_modules"));
+        dirs.push(home.join(".node_libraries"));
+    }
+    if let Some(prefix) = node.canonicalize().ok().and_then(|n| Some(n.parent()?.parent()?.to_path_buf())) {
+        dirs.push(prefix.join("lib").join("node"));
+    }
+    dirs
+}
+
+/// The directory holding the Node.js executable's `bin` (on Windows, its own directory).
+fn node_prefix(node: &Path) -> Option<PathBuf> {
+    let node = node.canonicalize().ok()?;
+    let dir = node.parent()?;
+    Some(if cfg!(windows) { dir.to_path_buf() } else { dir.parent()?.to_path_buf() })
+}
+
+/// Where `npm root -g` usually points, without starting npm (~0.2 s): the
+/// prefix from `npm_config_prefix` or `~/.npmrc`, else npm's default.
+fn npm_global_roots(node: &Path) -> Vec<PathBuf> {
+    let modules = |prefix: PathBuf| {
+        if cfg!(windows) {
+            prefix.join("node_modules")
+        } else {
+            prefix.join("lib").join("node_modules")
+        }
+    };
+    let configured = std::env::var_os("npm_config_prefix")
+        .or_else(|| std::env::var_os("NPM_CONFIG_PREFIX"))
+        .map(PathBuf::from)
+        .or_else(|| {
+            let rc = std::fs::read_to_string(dirs::home_dir()?.join(".npmrc")).ok()?;
+            rc.lines().find_map(|l| {
+                let (k, v) = l.split_once('=')?;
+                (k.trim() == "prefix").then(|| PathBuf::from(v.trim().trim_matches('"')))
+            })
+        });
+    if let Some(prefix) = configured {
+        return vec![modules(prefix)];
+    }
+    let mut roots = Vec::new();
+    if cfg!(windows) {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            roots.push(modules(PathBuf::from(appdata).join("npm")));
+        }
+    }
+    roots.extend(node_prefix(node).map(modules));
+    roots
+}
+
+/// `dir/package` if it holds a Playwright package, with symlinks resolved as Node does.
+fn package_in(dir: &Path, package: &str) -> Option<PathBuf> {
+    let p = dir.join(package);
+    p.join("index.js").exists().then(|| p.canonicalize().unwrap_or(p))
+}
+
+fn npm_root_global() -> Option<PathBuf> {
+    Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" })
+        .args(["root", "-g"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
 }
 
 /// The directory of a Playwright package (`playwright-core` or `playwright`):
@@ -58,18 +129,16 @@ pub fn playwright_dir() -> Result<PathBuf> {
         p
     } else {
         let node = node_path()?;
-        let global = Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" })
-            .args(["root", "-g"])
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()));
+        let local = node_search_dirs(&node);
+        let global = npm_global_roots(&node);
+        // npm itself is only asked when the usual places do not hold the package.
+        let npm_root = std::cell::OnceCell::new();
         ["playwright-core", "playwright"]
             .iter()
             .find_map(|pkg| {
-                resolve_from(&node, None, pkg)
-                    .or_else(|| global.as_ref().map(|g| g.join(pkg)).filter(|d| d.join("index.js").exists()))
+                local.iter().chain(&global).find_map(|d| package_in(d, pkg)).or_else(|| {
+                    npm_root.get_or_init(npm_root_global).as_deref().and_then(|d| package_in(d, pkg))
+                })
             })
             .ok_or_else(|| {
                 Error::runtime(
