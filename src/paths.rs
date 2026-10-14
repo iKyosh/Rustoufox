@@ -124,6 +124,7 @@ pub mod data {
     pub const FPGEN_YML: &str = include_str!("../data/fpgen.yml");
     pub const LAUNCHER_CONSTANTS: &str = include_str!("../data/launcher-constants.json");
     pub const SERVER_JS: &str = include_str!("../data/server.js");
+    pub const PLAYWRIGHT_PREFS: &str = include_str!("../data/playwright-prefs.json");
     pub const INSPECT_JS: &str = include_str!("../data/inspect.js");
     pub const HOST_GPU_JS: &str = include_str!("../data/hostGpu.js");
     pub const MEDIA_DEVICES: &str = include_str!("../data/media-devices.json");

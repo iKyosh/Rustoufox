@@ -548,9 +548,13 @@ fn plan_rendering(
                 Err(e) => {
                     // Fail closed: an unknown host GPU is treated as one fpgen never recorded.
                     warnings::runtime(format!(
-                        "Could not read the host GPU ({e}). The canvas is covered as for another machine. \
-                         Install Node.js and playwright-core (or set RUSTOUFOX_PLAYWRIGHT_CORE) to let the \
-                         identity claim this machine's GPU."
+                        "Could not read the host GPU ({e}). The canvas is covered as for another machine.{}",
+                        if cfg!(unix) {
+                            ""
+                        } else {
+                            " Install Node.js and playwright-core (or set RUSTOUFOX_PLAYWRIGHT_CORE) to let the \
+                             identity claim this machine's GPU."
+                        }
                     ));
                     return Ok((canvas_noise.is_none(), None));
                 }
