@@ -54,8 +54,9 @@ struct PageState {
     url: String,
     /// The default world's execution context of each frame.
     contexts: HashMap<String, String>,
-    /// The navigation the main frame last committed.
+    /// The navigation the main frame last committed, and how many it has.
     committed: Option<String>,
+    commits: u64,
     /// Navigations whose `load` fired.
     loaded: Vec<String>,
     /// Navigations that failed, with the browser's error text.
@@ -198,6 +199,7 @@ fn handle_message(st: &mut State, msg: Value) {
         "Page.navigationCommitted" if is_main => {
             page.url = s(&p["url"]).unwrap_or_default();
             page.committed = s(&p["navigationId"]);
+            page.commits += 1;
         }
         "Page.sameDocumentNavigation" if is_main => page.url = s(&p["url"]).unwrap_or_default(),
         "Page.navigationAborted" if is_main => {
@@ -463,22 +465,45 @@ impl Page {
     /// Navigate the main frame and wait for its `load` event.
     pub fn goto(&self, url: &str) -> Result<()> {
         let frame = self.main_frame()?;
+        let commits_before = {
+            let st = self.conn.shared.state.lock().unwrap();
+            st.pages.get(&self.session).map_or(0, |p| p.commits)
+        };
         let r = self.call("Page.navigate", json!({ "frameId": frame, "url": url }))?;
         // No navigation id: a same-document navigation, already done.
         let Some(nav) = r["navigationId"].as_str() else { return Ok(()) };
-        let failed = self.conn.wait(DEFAULT_TIMEOUT, &format!("goto {url}"), |st| {
+        let outcome = self.conn.wait(DEFAULT_TIMEOUT, &format!("goto {url}"), |st| {
             let page = st.pages.get(&self.session)?;
             if page.crashed {
-                return Some(Some("the page crashed".to_string()));
+                return Some(Err("the page crashed".to_string()));
             }
             if let Some(err) = page.aborted.get(nav) {
-                return Some(Some(err.clone()));
+                return Some(Err(err.clone()));
             }
-            page.loaded.iter().any(|n| n == nav).then_some(None)
+            if page.loaded.iter().any(|n| n == nav) {
+                return Some(Ok(false));
+            }
+            // Another navigation committed in its place: an error page, or a
+            // script redirect.
+            let replaced = page.commits > commits_before && page.committed.as_deref() != Some(nav);
+            replaced.then_some(Ok(true))
         })?;
-        match failed {
-            Some(err) => Err(Error::runtime(format!("goto {url}: {err}"))),
-            None => Ok(()),
+        match outcome {
+            Ok(false) => Ok(()),
+            Ok(true) => {
+                // Firefox shows network errors as an about:neterror page, which
+                // commits as its own navigation and never fires `load`.
+                let doc = self.evaluate("document.documentURI").unwrap_or_default();
+                let doc = doc.as_str().unwrap_or_default();
+                match doc.strip_prefix("about:neterror?e=") {
+                    Some(rest) => {
+                        let code = rest.split('&').next().unwrap_or(rest);
+                        Err(Error::runtime(format!("goto {url}: network error ({code})")))
+                    }
+                    None => Err(Error::runtime(format!("goto {url}: interrupted by another navigation to {doc}"))),
+                }
+            }
+            Err(err) => Err(Error::runtime(format!("goto {url}: {err}"))),
         }
     }
 
@@ -746,6 +771,39 @@ mod tests {
         let page = Page { conn: conn.clone(), session: "S1".into(), target: "T1".into() };
         let err = page.goto("https://nope.invalid/").unwrap_err().to_string();
         assert!(err.contains("NS_ERROR_UNKNOWN_HOST"), "{err}");
+    }
+
+    #[test]
+    fn reports_network_error_pages() {
+        let conn = fake_browser(|method, _, _| match method {
+            "Page.navigate" => (
+                json!({ "navigationId": "N3" }),
+                vec![
+                    page_event("Page.navigationStarted", json!({ "frameId": "F1", "navigationId": "N4" })),
+                    page_event(
+                        "Runtime.executionContextCreated",
+                        json!({ "executionContextId": "E4", "auxData": { "frameId": "F1" } }),
+                    ),
+                    page_event(
+                        "Page.navigationCommitted",
+                        json!({ "frameId": "F1", "navigationId": "N4", "url": "http://127.0.0.1:1/", "name": "" }),
+                    ),
+                ],
+            ),
+            "Runtime.evaluate" => (
+                json!({ "result": { "type": "string", "value": "about:neterror?e=deniedPortAccess&u=http%3A//127.0.0.1%3A1/" } }),
+                vec![],
+            ),
+            _ => (json!({}), vec![]),
+        });
+        {
+            let mut st = conn.shared.state.lock().unwrap();
+            st.pages
+                .insert("S1".into(), PageState { ready: true, main_frame: Some("F1".into()), ..Default::default() });
+        }
+        let page = Page { conn: conn.clone(), session: "S1".into(), target: "T1".into() };
+        let err = page.goto("http://127.0.0.1:1/").unwrap_err().to_string();
+        assert_eq!(err, "goto http://127.0.0.1:1/: network error (deniedPortAccess)");
     }
 
     #[test]
