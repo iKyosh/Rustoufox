@@ -48,6 +48,27 @@ directory and `RUSTOUFOX_NODE` at a Node executable.
 If you drive Playwright yourself, `launch_options()` returns the exact
 `firefox.launch()` options and starts nothing.
 
+### Without Node.js (experimental)
+
+`rustoufox::juggler` speaks Juggler directly over the browser's pipe, with no
+Node.js and no Playwright. It covers contexts, pages, `goto`, `evaluate`,
+screenshots, cookies, clicks and text input; it has no selectors,
+auto-waiting or network interception. Linux and macOS only for now.
+
+```rust
+use rustoufox::juggler::Browser;
+use rustoufox::{Headless, LaunchOptions};
+
+let browser = Browser::launch(LaunchOptions { headless: Headless::On, ..Default::default() })?;
+let page = browser.new_context()?.new_page()?;
+page.goto("https://example.com")?;
+println!("{}", page.evaluate("document.title")?);
+browser.close()?;
+```
+
+`cargo run --release --example juggler` compares its startup with the Node
+server. `RUSTOUFOX_JUGGLER_DEBUG=1` shows the browser's own output.
+
 ## Install
 
 ```bash

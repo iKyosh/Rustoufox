@@ -33,6 +33,7 @@ pub mod fpgen;
 pub mod geolocation;
 pub mod host_rendering;
 pub mod ip;
+pub mod juggler;
 pub mod launch;
 pub mod locales;
 pub mod multiversion;
