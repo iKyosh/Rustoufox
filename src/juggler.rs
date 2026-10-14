@@ -573,6 +573,7 @@ impl Page {
 /// The `[vendor, renderer]` WebGL reports in a bare browser (no identity,
 /// WebGL forced on), or null without WebGL. The host GPU probe of
 /// [`crate::host_rendering::host_gpu`].
+#[cfg(unix)]
 pub(crate) fn read_host_gpu(
     executable_path: &str,
     headless: bool,
