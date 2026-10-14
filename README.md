@@ -25,6 +25,7 @@ files as the Python and TypeScript launchers, so they can share one install.
 | Build management: repos.yml channels, paired build, `sync`/`fetch`/`set`/`list`/`remove`/`active`/`version`/`path` | Ported |
 | Virtual display (Xvfb with `-displayfd`), CPU pinning, Linux fontconfig, `~/.camoufox` | Ported |
 | Per-context identities (`NewContext`): init script and context options | Ported |
+| Canvas noise | On by default when the identity claims another OS or GPU than the host's, unlike the Python launcher; see [The canvas on another OS](#the-canvas-on-another-os) |
 | Driving the browser | Through Playwright's own server, see below |
 
 ## How the browser is driven
@@ -47,6 +48,44 @@ directory and `RUSTOUFOX_NODE` at a Node executable.
 
 If you drive Playwright yourself, `launch_options()` returns the exact
 `firefox.launch()` options and starts nothing.
+
+### Which path for Python, Java or .NET
+
+A Python, Java or .NET Playwright client already runs its own Node.js driver.
+With `rustoufox server`, a second Node.js process runs rustoufox's server
+(about 80 MB and 0.15 s more at start-up). For these clients, prefer
+`rustoufox options` and launch the browser with the client's own
+`firefox.launch()`; keep `server` for remote clients or to share one browser
+between several clients.
+
+The JSON printed by `options` maps to the client's arguments:
+
+| JSON | Python | Java / .NET |
+|---|---|---|
+| `executablePath` | `executable_path` | `setExecutablePath` / `ExecutablePath` |
+| `args` | `args` | `setArgs` / `Args` |
+| `env` | `env` | `setEnv` / `Env` |
+| `firefoxUserPrefs` | `firefox_user_prefs` | `setFirefoxUserPrefs` / `FirefoxUserPrefs` |
+| `headless` | `headless` | `setHeadless` / `Headless` |
+| `proxy` (`server`, `username`, `password`) | `proxy` (same keys) | `setProxy` / `Proxy` |
+
+Any other key comes from `LaunchOptions::extra` and keeps Playwright's
+camelCase name.
+
+```python
+import json, re, subprocess
+from playwright.sync_api import sync_playwright
+
+out = subprocess.run(["rustoufox", "options", "--os", "windows", "--headless", "true"],
+                     check=True, capture_output=True, text=True).stdout
+opts = {re.sub(r"(?<!^)(?=[A-Z])", "_", k).lower(): v for k, v in json.loads(out).items()}
+
+with sync_playwright() as p:
+    browser = p.firefox.launch(**opts)
+```
+
+In `server` mode, the `playwright-core` that rustoufox runs must have the same
+version as the client's Playwright: a mismatch fails at `connect()`.
 
 ### Without Node.js (experimental)
 
@@ -80,6 +119,14 @@ Prebuilt binaries for Linux (x86_64), macOS (Apple Silicon) and Windows
 (x86_64) are attached to each [release](https://github.com/iKyosh/Rustoufox/releases).
 Drop `--tag` to build the latest `main`.
 
+The Linux binary needs glibc 2.28 or later (Debian 10, Ubuntu 18.10, RHEL 8).
+The one attached to `v0.1.0-beta.1` needs glibc 2.39: on Debian 12, Ubuntu
+22.04 or RHEL 9, build it with `cargo install` as above.
+
+On disk, the paired browser takes about 2.4 GB (v156.0.1-beta.38), the
+default GeoIP database 116 MB and fpgen's decompressed `values.dat` about
+200 MB.
+
 `fetch` installs the browser build this release is paired with
 (`data/browser-pin.json`), the GeoIP database, uBlock Origin and fpgen's model.
 
@@ -103,6 +150,10 @@ Launch options on the command line: `--os windows` (repeatable),
 `--headless true|false|virtual`, `--proxy URL --proxy-username U --proxy-password P`,
 `--geoip auto|IP`, `--locale fr-FR`, `--humanize`, `--block-images`,
 `--block-webrtc`, `--canvas-noise true|false`, `--pin-cpu-cores`, `--debug`.
+
+`--geoip auto` looks up the public (or proxy exit) IP on every launch, since
+each command is a new process: about 0.15 s, and one of the IP services must
+answer. When the exit IP is known, pass it as `--geoip <IP>` instead.
 
 ```bash
 rustoufox server --os windows --headless virtual --geoip auto \
@@ -164,7 +215,9 @@ claims. As in the Python launcher, an identity on the host's own OS claims the
 GPU the host renders with, read once from a bare browser (over Juggler on
 Linux and macOS, through Playwright on Windows). An identity on another OS or
 GPU turns on the canvas protection of `privacy.resistFingerprinting` and
-warns. When the host GPU cannot be read (on Windows, no Node.js or
+warns. This canvas noise is on by default, which neither the Python launcher
+nor stock Firefox does: to compare the two launchers like for like, set
+`--canvas-noise` (`canvas_noise`) explicitly on both sides. When the host GPU cannot be read (on Windows, no Node.js or
 `playwright-core`), rustoufox treats it as unknown and covers the canvas
 rather than risk a mismatch.
 
@@ -227,7 +280,16 @@ to load the page, which the Python figure does not.
 
 The gain matters when a process draws many identities (many contexts per
 browser, frequent relaunches) or runs on a small machine; for one long-lived
-browser it is negligible.
+browser it is negligible. A client that keeps one browser and reuses it for
+many pages will see no difference: start-up gains only show when browsers are
+launched often from fresh processes.
+
+When comparing the two launchers on real sites, pin the same browser build on
+both sides (`rustoufox set` here, `executable_path` in Python): rustoufox is
+paired with v156 while the Python package may run an older build already
+installed, and the build changes anti-bot results more than the launcher
+does. Set canvas noise explicitly too (see
+[The canvas on another OS](#the-canvas-on-another-os)).
 
 To reproduce, with a Camoufox executable at `$EXE`:
 

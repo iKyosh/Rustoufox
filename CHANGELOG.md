@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- `launch_server()` starts Node.js before drawing the identity, so Playwright
+  loads meanwhile: the endpoint comes about 0.2 to 0.4 s sooner (#6). With
+  `pin_cpu_cores`, the order stays sequential.
+- The GeoIP database is memory-mapped instead of read whole: about 110 MB
+  less peak memory per launch with GeoIP (#7).
+- The Linux release binary links against glibc 2.28 instead of the runner's
+  (2.39), so it runs on Debian 10+, Ubuntu 18.10+ and RHEL 8+ (#11).
+- README: the path for Python, Java and .NET clients (#9), `--geoip <IP>`
+  (#10), canvas noise, disk footprint and comparing with the Python launcher
+  (#12).
+
 ## 0.1.0-beta.1
 
 First public beta of rustoufox, a Rust port of the Camoufox launcher. It is
