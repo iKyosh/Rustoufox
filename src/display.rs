@@ -61,7 +61,7 @@ fn parse_xrandr(text: &str) -> Option<DisplaySize> {
 fn windows_primary() -> Option<DisplaySize> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
     let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
-    (w > 0 && h > 0).then(|| DisplaySize { width: w as i64, height: h as i64 })
+    (w > 0 && h > 0).then_some(DisplaySize { width: w as i64, height: h as i64 })
 }
 
 /// macOS reports points, which are CSS pixels: "UI Looks like: 1512 x 982".

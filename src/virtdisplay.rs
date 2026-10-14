@@ -42,6 +42,7 @@ impl VirtualDisplay {
         Ok(VirtualDisplay { debug, screen: resolve_screen()?, composite, proc: None, display: None })
     }
 
+    #[cfg(unix)]
     fn xvfb_args(&self) -> Vec<String> {
         [
             "-screen",
