@@ -130,6 +130,10 @@ default GeoIP database 116 MB and fpgen's decompressed `values.dat` about
 `fetch` installs the browser build this release is paired with
 (`data/browser-pin.json`), the GeoIP database, uBlock Origin and fpgen's model.
 
+[docs/deployment.md](docs/deployment.md) covers a server or container (LXC,
+Docker), the system packages, a systemd service, and depending on rustoufox
+from another project.
+
 ## Command line
 
 | Command | What it does |
@@ -142,7 +146,7 @@ default GeoIP database 116 MB and fpgen's decompressed `values.dat` about
 | `rustoufox remove [VERSION] [--select] [-y]` | Remove one build, pick one, or the whole data directory. |
 | `rustoufox version` | Versions, active build, GeoIP database, storage. |
 | `rustoufox path` | Print the data directory. |
-| `rustoufox server [launch options] [--port N] [--ws-path P]` | Start a server and print its endpoint. Ctrl+C closes the browser and the virtual display. |
+| `rustoufox server [launch options] [--host H] [--port N] [--ws-path P]` | Start a server and print its endpoint. Ctrl+C closes the browser and the virtual display. |
 | `rustoufox options [launch options]` | Print the Playwright `firefox.launch()` options as JSON. |
 | `rustoufox test [URL]` | Open a headed browser with the Playwright inspector. |
 
