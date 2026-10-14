@@ -72,9 +72,13 @@ server. `RUSTOUFOX_JUGGLER_DEBUG=1` shows the browser's own output.
 ## Install
 
 ```bash
-cargo install --git https://github.com/iKyosh/Rustoufox
+cargo install --git https://github.com/iKyosh/Rustoufox --tag v0.1.0-beta.1
 rustoufox fetch
 ```
+
+Prebuilt binaries for Linux (x86_64), macOS (Apple Silicon) and Windows
+(x86_64) are attached to each [release](https://github.com/iKyosh/Rustoufox/releases).
+Drop `--tag` to build the latest `main`.
 
 `fetch` installs the browser build this release is paired with
 (`data/browser-pin.json`), the GeoIP database, uBlock Origin and fpgen's model.
