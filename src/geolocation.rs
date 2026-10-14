@@ -120,7 +120,7 @@ pub fn mmdb_path(ip_version: &str, source: &Value) -> PathBuf {
 }
 
 fn build_age_days(path: &std::path::Path) -> Option<f64> {
-    let reader = maxminddb::Reader::open_readfile(path).ok()?;
+    let reader = maxminddb::Reader::open_mmap(path).ok()?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs_f64();
     Some((now - reader.metadata.build_epoch as f64) / 86400.0)
 }
@@ -245,7 +245,7 @@ pub fn get_geolocation(ip: &str, geoip_db: Option<&str>) -> Result<Geolocation> 
     if !path.exists() || needs_update(&source) {
         download_mmdb(geoip_db, geoip_db.is_none())?;
     }
-    let reader = maxminddb::Reader::open_readfile(&path)?;
+    let reader = maxminddb::Reader::open_mmap(&path)?;
     let addr: IpAddr = ip.parse().map_err(|_| Error::InvalidIp(format!("Invalid IP address: {ip}")))?;
     let resp: Value = match reader.lookup::<Value>(addr) {
         Ok(v) => v,

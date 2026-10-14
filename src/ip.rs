@@ -121,12 +121,64 @@ pub fn proxy_exit_geo(proxy_url: &str) -> Result<(String, String)> {
     Ok((ip, tz.unwrap().to_string()))
 }
 
-/// The public IP, through `proxy` when given. Cached per proxy.
+/// How long a public IP stays cached on disk, from `RUSTOUFOX_IP_CACHE_TTL`
+/// (seconds). Off when unset or 0.
+fn disk_cache_ttl() -> Option<u64> {
+    std::env::var("RUSTOUFOX_IP_CACHE_TTL").ok()?.trim().parse().ok().filter(|t| *t > 0)
+}
+
+fn disk_cache_path() -> std::path::PathBuf {
+    crate::paths::install_dir().join("ip-cache.json")
+}
+
+/// The cache key of a proxy: a hash, so its credentials are not written to disk.
+fn disk_cache_key(proxy: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(proxy.unwrap_or("").as_bytes()))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn read_disk_cache() -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read(disk_cache_path())
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn cached_on_disk(proxy: Option<&str>, ttl: u64) -> Option<String> {
+    let entry = read_disk_cache().remove(&disk_cache_key(proxy))?;
+    let at = entry["at"].as_u64()?;
+    let ip = entry["ip"].as_str()?;
+    (now_secs().saturating_sub(at) < ttl && validate_ip(ip).is_ok()).then(|| ip.to_string())
+}
+
+fn store_on_disk(proxy: Option<&str>, ip: &str, ttl: u64) {
+    let now = now_secs();
+    let mut cache = read_disk_cache();
+    cache.retain(|_, e| e["at"].as_u64().is_some_and(|at| now.saturating_sub(at) < ttl));
+    cache.insert(disk_cache_key(proxy), serde_json::json!({ "ip": ip, "at": now }));
+    let _ = std::fs::create_dir_all(crate::paths::install_dir());
+    let _ = crate::pkgman::write_atomic(&disk_cache_path(), serde_json::Value::Object(cache).to_string().as_bytes());
+}
+
+/// The public IP, through `proxy` when given. Cached per proxy for the life
+/// of the process and, when `RUSTOUFOX_IP_CACHE_TTL` is set, on disk for that
+/// many seconds. Leave the disk cache off with a rotating proxy: its exit IP
+/// changes between launches.
 pub fn public_ip(proxy: Option<&str>) -> Result<String> {
     static CACHE: Mutex<Option<HashMap<Option<String>, String>>> = Mutex::new(None);
     let key = proxy.map(str::to_string);
     if let Some(ip) = CACHE.lock().unwrap().get_or_insert_with(HashMap::new).get(&key) {
         return Ok(ip.clone());
+    }
+    let ttl = disk_cache_ttl();
+    if let Some(ip) = ttl.and_then(|t| cached_on_disk(proxy, t)) {
+        CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(key, ip.clone());
+        return Ok(ip);
     }
     const URLS: [&str; 6] = [
         "https://api.ipify.org",
@@ -151,6 +203,9 @@ pub fn public_ip(proxy: Option<&str>) -> Result<String> {
             });
         match result {
             Ok(ip) => {
+                if let Some(t) = ttl {
+                    store_on_disk(proxy, &ip, t);
+                }
                 CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(key, ip.clone());
                 return Ok(ip);
             }
@@ -169,6 +224,14 @@ mod tests {
         let p = Proxy::new("proxy.example.com:8080").with_auth("us#er", "p@ss/%41");
         assert_eq!(p.as_url().unwrap(), "http://us%23er:p%40ss%2F%2541@proxy.example.com:8080");
         assert_eq!(Proxy::new("socks5://1.2.3.4:1080").as_url().unwrap(), "socks5://1.2.3.4:1080");
+    }
+
+    #[test]
+    fn disk_cache_key_hides_credentials() {
+        let key = disk_cache_key(Some("http://user:secret@proxy.example.com:8080"));
+        assert_eq!(key.len(), 64);
+        assert!(!key.contains("secret"));
+        assert_ne!(key, disk_cache_key(None));
     }
 
     #[test]
