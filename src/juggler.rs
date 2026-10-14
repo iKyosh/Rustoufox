@@ -97,6 +97,13 @@ impl Connection {
 
     /// Send a call and wait for its reply. `session` addresses a page.
     pub fn call(&self, session: Option<&str>, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+        let id = self.send(session, method, params)?;
+        let reply = self.wait(timeout, method, |st| st.replies.remove(&id))?;
+        reply.map_err(|e| Error::runtime(format!("{method}: {e}")))
+    }
+
+    /// Send a call without waiting for its reply; returns its id.
+    fn send(&self, session: Option<&str>, method: &str, params: Value) -> Result<u64> {
         let id = {
             let mut st = self.shared.state.lock().unwrap();
             st.next_id += 1;
@@ -108,13 +115,15 @@ impl Connection {
         }
         let mut bytes = serde_json::to_vec(&msg)?;
         bytes.push(0);
-        {
-            let mut w = self.writer.lock().unwrap();
-            w.write_all(&bytes)?;
-            w.flush()?;
-        }
-        let reply = self.wait(timeout, method, |st| st.replies.remove(&id))?;
-        reply.map_err(|e| Error::runtime(format!("{method}: {e}")))
+        let mut w = self.writer.lock().unwrap();
+        w.write_all(&bytes)?;
+        w.flush()?;
+        Ok(id)
+    }
+
+    /// Close our end of the pipe: Juggler takes that as Browser.close.
+    fn close_writer(&self) {
+        *self.writer.lock().unwrap() = Box::new(std::io::sink());
     }
 
     /// Wait until `f` returns a value, the pipe closes or `timeout` runs out.
@@ -355,8 +364,10 @@ impl Browser {
 
     fn shutdown(&mut self) {
         let Some(mut child) = self.child.take() else { return };
-        // Browser.close does not always answer before the process exits.
-        let _ = self.conn.call(None, "Browser.close", json!({}), Duration::from_secs(10));
+        // Juggler stops the pipe before answering Browser.close, so no reply
+        // comes; closing our end as well is what lets the browser quit.
+        let _ = self.conn.send(None, "Browser.close", json!({}));
+        self.conn.close_writer();
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if matches!(child.try_wait(), Ok(Some(_))) {
@@ -557,6 +568,45 @@ impl Page {
         self.call("Page.close", json!({ "runBeforeUnload": false }))?;
         Ok(())
     }
+}
+
+/// The `[vendor, renderer]` WebGL reports in a bare browser (no identity,
+/// WebGL forced on), or null without WebGL. The host GPU probe of
+/// [`crate::host_rendering::host_gpu`].
+pub(crate) fn read_host_gpu(
+    executable_path: &str,
+    headless: bool,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<Value> {
+    let mut prefs = Map::new();
+    prefs.insert("webgl.force-enabled".into(), true.into());
+    let launch = LaunchConfig {
+        executable_path: executable_path.into(),
+        args: vec![],
+        env: env.clone(),
+        firefox_user_prefs: prefs,
+        headless,
+        proxy: None,
+        extra: Map::new(),
+        camou_config: Map::new(),
+        target_os: String::new(),
+        host_identity: None,
+        pin_cores: None,
+        warnings: vec![],
+    };
+    let browser = Browser::from_config(launch)?;
+    let page = browser.new_context()?.new_page()?;
+    let gpu = page.evaluate(
+        "(() => {
+            const gl = document.createElement('canvas').getContext('webgl');
+            const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+            return info
+                ? [gl.getParameter(info.UNMASKED_VENDOR_WEBGL), gl.getParameter(info.UNMASKED_RENDERER_WEBGL)]
+                : null;
+        })()",
+    )?;
+    browser.close()?;
+    Ok(gpu)
 }
 
 /// The value of a by-value RemoteObject. JSON has no NaN, Infinity or -0:

@@ -157,11 +157,12 @@ cargo run --example server
 
 Canvas and WebGL pixels come from the real machine whatever the identity
 claims. As in the Python launcher, an identity on the host's own OS claims the
-GPU the host renders with, read once from the browser through Playwright. An
-identity on another OS or GPU turns on the canvas protection of
-`privacy.resistFingerprinting` and warns. When the host GPU cannot be read
-(no Node.js or `playwright-core`), rustoufox treats it as unknown and covers
-the canvas rather than risk a mismatch.
+GPU the host renders with, read once from a bare browser (over Juggler on
+Linux and macOS, through Playwright on Windows). An identity on another OS or
+GPU turns on the canvas protection of `privacy.resistFingerprinting` and
+warns. When the host GPU cannot be read (on Windows, no Node.js or
+`playwright-core`), rustoufox treats it as unknown and covers the canvas
+rather than risk a mismatch.
 
 ## Environment variables
 
