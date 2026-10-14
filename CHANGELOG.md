@@ -16,6 +16,8 @@
 - README: the path for Python, Java and .NET clients (#9), `--geoip <IP>`,
   canvas noise, disk footprint and comparing with the Python launcher
   (#12).
+- docs/deployment.md: running on a Linux container, as a systemd service,
+  and as a dependency of another project.
 
 ## 0.1.0-beta.1
 
