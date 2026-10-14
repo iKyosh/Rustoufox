@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.3
 
 - rustoufox no longer runs on Windows: no Windows binary, no `windows-sys`
   dependency, and the last Node.js script used outside `launch_server`
-  (`hostGpu.js`) is gone. Windows identities are unchanged.
+  (`hostGpu.js`) is gone. Windows identities are unchanged (#17). The last
+  Windows binary is attached to `v0.1.0-beta.2`.
 
 ## 0.1.0-beta.2
 
