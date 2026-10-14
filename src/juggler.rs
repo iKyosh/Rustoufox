@@ -637,14 +637,14 @@ fn juggler_proxy(proxy: &Proxy) -> Result<Value> {
     };
     let bypass: Vec<String> =
         proxy.bypass.as_deref().map(|b| b.split(',').map(|d| d.trim().to_string()).collect()).unwrap_or_default();
-    Ok(json!({
-        "type": kind,
-        "bypass": bypass,
-        "host": host,
-        "port": port,
-        "username": proxy.username,
-        "password": proxy.password,
-    }))
+    let mut out = json!({ "type": kind, "bypass": bypass, "host": host, "port": port });
+    // Juggler wants these absent, not null, when the proxy has no credentials.
+    for (key, value) in [("username", &proxy.username), ("password", &proxy.password)] {
+        if let Some(v) = value {
+            out[key] = v.as_str().into();
+        }
+    }
+    Ok(out)
 }
 
 fn write_user_js(dir: &std::path::Path, prefs: &Map<String, Value>) -> Result<()> {
@@ -970,6 +970,7 @@ while True:
         assert_eq!(v["username"], "u");
         let v = juggler_proxy(&Proxy::new("http://proxy.example.com")).unwrap();
         assert_eq!((v["type"].as_str(), v["port"].as_u64()), (Some("http"), Some(80)));
+        assert!(v.get("username").is_none() && v.get("password").is_none(), "{v}");
         let v = juggler_proxy(&Proxy::new("https://[::1]:8443")).unwrap();
         assert_eq!((v["host"].as_str(), v["port"].as_u64()), (Some("::1"), Some(8443)));
     }
