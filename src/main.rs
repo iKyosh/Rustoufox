@@ -911,6 +911,8 @@ fn run(cli: Cli) -> Result<()> {
             ctrlc::set_handler(move || flag.store(true, std::sync::atomic::Ordering::SeqCst))
                 .map_err(|e| Error::runtime(format!("cannot install the signal handler: {e}")))?;
             let mut server = rustoufox::launch_server(launch.into_options()?, ServerOptions { port, ws_path, host })?;
+            // Nothing else is drawn while the browser runs.
+            rustoufox::fpgen::release_network();
             println!("Websocket endpoint: {}", style(server.ws_endpoint(), Some("yellow"), true));
             while !stop.load(std::sync::atomic::Ordering::SeqCst) && server.try_wait()?.is_none() {
                 std::thread::sleep(std::time::Duration::from_millis(200));

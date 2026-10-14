@@ -571,6 +571,18 @@ pub fn network() -> Result<Arc<Network>> {
     Ok(n)
 }
 
+/// Drop the loaded network (about 85 MB) once no draw holds it, and hand the
+/// freed memory back to the system. The next draw loads it again, so call
+/// this only when no more identities will be drawn for a while, such as in a
+/// launcher that waits on its browser.
+pub fn release_network() {
+    NETWORK.lock().unwrap_or_else(|e| e.into_inner()).take();
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
