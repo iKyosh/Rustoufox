@@ -7,10 +7,14 @@
   `pin_cpu_cores`, the order stays sequential.
 - The GeoIP database is memory-mapped instead of read whole: about 110 MB
   less peak memory per launch with GeoIP (#7).
+- `rustoufox server` drops fpgen's network once the browser runs: about
+  12 MB resident while it waits instead of 96 MB (#8).
+- `RUSTOUFOX_IP_CACHE_TTL` keeps the public IP on disk, per proxy, for that
+  many seconds; off by default (#10).
 - The Linux release binary links against glibc 2.28 instead of the runner's
   (2.39), so it runs on Debian 10+, Ubuntu 18.10+ and RHEL 8+ (#11).
-- README: the path for Python, Java and .NET clients (#9), `--geoip <IP>`
-  (#10), canvas noise, disk footprint and comparing with the Python launcher
+- README: the path for Python, Java and .NET clients (#9), `--geoip <IP>`,
+  canvas noise, disk footprint and comparing with the Python launcher
   (#12).
 
 ## 0.1.0-beta.1

@@ -153,7 +153,13 @@ Launch options on the command line: `--os windows` (repeatable),
 
 `--geoip auto` looks up the public (or proxy exit) IP on every launch, since
 each command is a new process: about 0.15 s, and one of the IP services must
-answer. When the exit IP is known, pass it as `--geoip <IP>` instead.
+answer. When the exit IP is known, pass it as `--geoip <IP>` instead, or set
+`RUSTOUFOX_IP_CACHE_TTL` to keep the IP found on disk for that many seconds,
+per proxy. Leave that cache off with a rotating proxy, whose exit IP changes
+between launches.
+
+While `rustoufox server` waits on the browser, it drops fpgen's network and
+stays at about 12 MB resident.
 
 ```bash
 rustoufox server --os windows --headless virtual --geoip auto \
@@ -230,6 +236,7 @@ rather than risk a mismatch.
 | `CAMOUFOX_FPGEN_DATA` | Where fpgen's model is kept. |
 | `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` | Xvfb screen for `headless = virtual`, e.g. `1920x1080x24`. |
 | `RUSTOUFOX_PLAYWRIGHT_CORE`, `RUSTOUFOX_NODE` | Where to find Playwright and Node.js. |
+| `RUSTOUFOX_IP_CACHE_TTL` | Cache the public IP on disk for this many seconds, per proxy (off by default). |
 | `RUSTOUFOX_QUIET_WARNINGS` | Do not print warnings (they are still returned). |
 | `GITHUB_TOKEN` | Authenticate GitHub API calls during `sync`. |
 
