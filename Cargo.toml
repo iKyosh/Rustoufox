@@ -1,0 +1,56 @@
+[package]
+name = "rustoufox"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Rust launcher for the Camoufox anti-detect Firefox browser: a port of the camoufox Python/TypeScript launcher."
+license = "MIT"
+repository = "https://github.com/iKyosh/Rustoufox"
+keywords = ["camoufox", "firefox", "playwright", "fingerprint", "scraping"]
+categories = ["web-programming", "command-line-utilities"]
+
+[lib]
+name = "rustoufox"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rustoufox"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+thiserror = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots", "rustls-tls-webpki-roots", "socks", "json", "gzip"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+zstd = "0.13"
+sha2 = "0.10"
+hex = "0.4"
+regex = "1"
+roxmltree = "0.20"
+maxminddb = "0.24"
+clap = { version = "4", features = ["derive"] }
+indicatif = "0.17"
+tempfile = "3"
+base64 = "0.22"
+crc32fast = "1"
+rand = "0.8"
+dirs = "5"
+which = "6"
+dialoguer = "0.11"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+filetime = "0.2"
+getrandom = "0.2"
+once_cell = "1"
+ctrlc = { version = "3.5.2", features = ["termination"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_Storage_FileSystem"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
