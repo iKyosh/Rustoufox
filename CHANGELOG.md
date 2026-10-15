@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `rustoufox options` prints in `env` only the variables rustoufox adds or
+  changes, no longer the caller's whole environment (tokens, credentials).
+  Merge it with your own environment before passing it to Playwright, whose
+  `env` replaces the browser's (#20).
+- `rustoufox version | head` and other closed pipes end quietly instead of
+  panicking with exit code 101 (#21).
+- `rustoufox server` handles Ctrl+C or SIGTERM at once and waits for Node in
+  10 ms steps instead of 100 ms: about 0.15 s less per close (#22).
+
 ## 0.1.0-beta.3
 
 - rustoufox no longer runs on Windows: no Windows binary, no `windows-sys`
