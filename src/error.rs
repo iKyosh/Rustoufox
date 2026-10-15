@@ -1,7 +1,7 @@
 //! Error type of the crate. One variant per failure the Python launcher raises
 //! as a distinct exception class, so a caller can match on them.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -64,6 +64,9 @@ pub enum Error {
     FileNotFound(PathBuf),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// An I/O failure on a known path: the message names it.
+    #[error("{}: {source}", path.display())]
+    IoAt { path: PathBuf, source: std::io::Error },
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
@@ -85,5 +88,16 @@ impl Error {
 
     pub fn runtime(msg: impl Into<String>) -> Self {
         Error::Runtime(msg.into())
+    }
+}
+
+/// Attaches the path to an I/O error, since `std::io::Error` carries none.
+pub(crate) trait IoContext<T> {
+    fn at(self, path: &Path) -> Result<T>;
+}
+
+impl<T> IoContext<T> for std::io::Result<T> {
+    fn at(self, path: &Path) -> Result<T> {
+        self.map_err(|source| Error::IoAt { path: path.to_path_buf(), source })
     }
 }
