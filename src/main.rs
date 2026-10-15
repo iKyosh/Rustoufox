@@ -906,16 +906,22 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Server { launch, port, ws_path, host } => {
             // A signal must still close the browser and the virtual display.
-            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let flag = stop.clone();
-            ctrlc::set_handler(move || flag.store(true, std::sync::atomic::Ordering::SeqCst))
-                .map_err(|e| Error::runtime(format!("cannot install the signal handler: {e}")))?;
+            let (stop_tx, stop) = std::sync::mpsc::channel::<()>();
+            ctrlc::set_handler(move || {
+                let _ = stop_tx.send(());
+            })
+            .map_err(|e| Error::runtime(format!("cannot install the signal handler: {e}")))?;
             let mut server = rustoufox::launch_server(launch.into_options()?, ServerOptions { port, ws_path, host })?;
             // Nothing else is drawn while the browser runs.
             rustoufox::fpgen::release_network();
             println!("Websocket endpoint: {}", style(server.ws_endpoint(), Some("yellow"), true));
-            while !stop.load(std::sync::atomic::Ordering::SeqCst) && server.try_wait()?.is_none() {
-                std::thread::sleep(std::time::Duration::from_millis(200));
+            // A signal wakes this up at once; the timeout only checks
+            // whether the server died on its own.
+            while server.try_wait()?.is_none() {
+                match stop.recv_timeout(std::time::Duration::from_millis(200)) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    _ => break,
+                }
             }
             server.close()
         }
@@ -925,18 +931,58 @@ fn run(cli: Cli) -> Result<()> {
                 return Err(Error::value("`options` cannot start a virtual display; pass --headless true or false"));
             }
             let config = rustoufox::launch_options(opts)?;
-            println!("{}", serde_json::to_string_pretty(&config.to_playwright())?);
+            let mut json = config.to_playwright();
+            strip_caller_env(&mut json);
+            println!("{}", serde_json::to_string_pretty(&json)?);
             Ok(())
         }
     }
 }
 
+/// Keep in `env` only what rustoufox adds or changes, never the caller's own
+/// variables (tokens, credentials): the client merges it with its environment.
+fn strip_caller_env(json: &mut serde_json::Value) {
+    if let Some(env) = json.get_mut("env").and_then(|e| e.as_object_mut()) {
+        env.retain(|k, v| std::env::var(k).ok().as_deref() != v.as_str());
+    }
+}
+
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let cli = Cli::parse();
+    // Let `rustoufox … | head` end quietly, like `cat`, instead of panicking
+    // on EPIPE. `server` and `test` write to Node's stdin, where a closed pipe
+    // must stay an error rather than kill the launcher.
+    #[cfg(unix)]
+    if !matches!(cli.command, Command::Server { .. } | Command::Test { .. }) {
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
+    }
+    match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{}", style(&format!("Error: {e}"), Some("red"), true));
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn options_env_leaves_out_the_caller_environment() {
+        let (home, path) = (std::env::var("HOME").unwrap(), std::env::var("PATH").unwrap());
+        let mut json = serde_json::json!({ "env": {
+            "HOME": home,
+            "PATH": format!("{path}:/extra"),
+            "CAMOU_CONFIG_1": "{}",
+        }});
+        strip_caller_env(&mut json);
+        let env = json["env"].as_object().unwrap();
+        assert!(!env.contains_key("HOME"));
+        assert!(env.contains_key("PATH"), "a changed variable is kept");
+        assert!(env.contains_key("CAMOU_CONFIG_1"));
     }
 }

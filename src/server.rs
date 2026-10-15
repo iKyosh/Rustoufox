@@ -229,7 +229,9 @@ impl CamoufoxServer {
             if matches!(self.child.try_wait(), Ok(Some(_))) {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(100));
+            // Node exits within half a second: a short step keeps the
+            // close close to that instead of rounding it up.
+            std::thread::sleep(Duration::from_millis(10));
         }
         if matches!(self.child.try_wait(), Ok(None)) {
             let _ = self.child.kill();

@@ -70,15 +70,21 @@ The JSON printed by `options` maps to the client's arguments:
 | `proxy` (`server`, `username`, `password`) | `proxy` (same keys) | `setProxy` / `Proxy` |
 
 Any other key comes from `LaunchOptions::extra` and keeps Playwright's
-camelCase name.
+camelCase name. `env` holds only the variables rustoufox adds or changes, not
+your own environment: merge it with yours (`System.getenv()` in Java,
+`Environment.GetEnvironmentVariables()` in .NET), since Playwright's `env`
+replaces the browser's environment.
 
 ```python
-import json, re, subprocess
+import json, os, re, subprocess
 from playwright.sync_api import sync_playwright
 
 out = subprocess.run(["rustoufox", "options", "--os", "windows", "--headless", "true"],
                      check=True, capture_output=True, text=True).stdout
 opts = {re.sub(r"(?<!^)(?=[A-Z])", "_", k).lower(): v for k, v in json.loads(out).items()}
+# `env` holds only what rustoufox adds; Playwright's `env` replaces the
+# environment, so merge it with your own.
+opts["env"] = {**os.environ, **opts.get("env", {})}
 
 with sync_playwright() as p:
     browser = p.firefox.launch(**opts)
