@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use crate::browser_pin;
 use crate::error::{Error, Result};
 use crate::multiversion;
-use crate::paths::{self, data, launch_file, rprint, ARCH, OS_NAME};
+use crate::paths::{self, data, eprint_status, launch_file, ARCH, OS_NAME};
 
 /// The camoufox Python release whose behaviour this crate ports. repos.yml
 /// keys its browser constraints by that version.
@@ -417,7 +417,7 @@ pub fn list_available_versions(
             }
             let interface = release_interface(release)?;
             if !interface_supported(interface) && !include_incompatible {
-                rprint(&incompatible_message(&version, interface), Some("yellow"));
+                eprint_status(&incompatible_message(&version, interface), Some("yellow"));
                 continue;
             }
             let digest = asset["digest"].as_str().unwrap_or("");
@@ -707,7 +707,7 @@ pub fn write_atomic(dest: &Path, data: &[u8]) -> Result<()> {
 /// warning, when the source publishes no digest.
 pub fn verify_sha256(actual: &str, expected: Option<&str>, desc: &str) -> Result<()> {
     let Some(expected) = expected else {
-        rprint(&format!("Warning: no sha256 published for {desc}; skipping verification."), Some("yellow"));
+        eprint_status(&format!("Warning: no sha256 published for {desc}; skipping verification."), Some("yellow"));
         return Ok(());
     };
     if actual != expected.to_lowercase() {
@@ -738,6 +738,7 @@ pub fn unzip_from<R: Read + std::io::Seek>(reader: R, dest: &Path, desc: Option<
         pb.set_message(d.to_string());
         pb
     });
+    let mut links = Vec::new();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
         let Some(rel) = entry.enclosed_name() else {
@@ -746,14 +747,21 @@ pub fn unzip_from<R: Read + std::io::Seek>(reader: R, dest: &Path, desc: Option<
                 entry.name()
             )));
         };
-        let out = dest.join(rel);
-        if entry.is_dir() {
+        refuse_symlinked_parent(dest, &rel)?;
+        let out = dest.join(&rel);
+        if entry.is_symlink() {
+            // Made once every file is written, so none is written through one.
+            let mut target = String::new();
+            entry.read_to_string(&mut target)?;
+            links.push((rel, target));
+        } else if entry.is_dir() {
             fs::create_dir_all(&out)?;
         } else {
             if let Some(parent) = out.parent() {
                 fs::create_dir_all(parent)?;
             }
-            let mut f = fs::File::create(&out)?;
+            remove_non_dir(&out)?;
+            let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&out)?;
             std::io::copy(&mut entry, &mut f)?;
             if let Some(mode) = entry.unix_mode() {
                 use std::os::unix::fs::PermissionsExt;
@@ -764,10 +772,41 @@ pub fn unzip_from<R: Read + std::io::Seek>(reader: R, dest: &Path, desc: Option<
             pb.inc(1);
         }
     }
+    for (rel, target) in links {
+        refuse_symlinked_parent(dest, &rel)?;
+        let out = dest.join(&rel);
+        if let Some(parent) = out.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        remove_non_dir(&out)?;
+        std::os::unix::fs::symlink(target, &out)?;
+    }
     if let Some(pb) = pb {
         pb.finish_and_clear();
     }
     Ok(())
+}
+
+/// Refuse a member whose parent directory, inside `dest`, is a symlink: it
+/// would be written wherever the link points.
+fn refuse_symlinked_parent(dest: &Path, rel: &Path) -> Result<()> {
+    let mut dir = dest.to_path_buf();
+    for part in rel.parent().into_iter().flat_map(Path::components) {
+        dir.push(part);
+        if fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(Error::CorruptedDownload(format!("Archive member {} goes through a symlink", rel.display())));
+        }
+    }
+    Ok(())
+}
+
+/// Remove a file or symlink already at `path`, so it is replaced rather than
+/// followed.
+fn remove_non_dir(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(m) if !m.is_dir() => Ok(fs::remove_file(path)?),
+        _ => Ok(()),
+    }
 }
 
 /// Format an asset timestamp as `Mon D`, or `Mon D, YYYY` when the year differs.
@@ -781,5 +820,56 @@ pub fn format_asset_date(iso: Option<&str>) -> String {
         dt.format("%b %-d").to_string()
     } else {
         dt.format("%b %-d, %Y").to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    fn archive(build: impl FnOnce(&mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>)) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        build(&mut zip);
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn symlinks_are_extracted_as_links() {
+        let bytes = archive(|z| {
+            z.start_file("Contents/MacOS/real", SimpleFileOptions::default()).unwrap();
+            z.write_all(b"binary").unwrap();
+            z.add_symlink("Contents/MacOS/link", "real", SimpleFileOptions::default()).unwrap();
+        });
+        let dest = tempfile::tempdir().unwrap();
+        unzip(&bytes, dest.path(), None).unwrap();
+        let link = dest.path().join("Contents/MacOS/link");
+        assert_eq!(fs::read_link(&link).unwrap(), Path::new("real"));
+        assert_eq!(fs::read(&link).unwrap(), b"binary");
+    }
+
+    #[test]
+    fn no_member_is_written_through_a_symlink() {
+        let outside = tempfile::tempdir().unwrap();
+        let through_dir = archive(|z| {
+            z.add_symlink("escape", outside.path().to_str().unwrap(), SimpleFileOptions::default()).unwrap();
+            z.start_file("escape/pwned", SimpleFileOptions::default()).unwrap();
+            z.write_all(b"x").unwrap();
+        });
+        let dest = tempfile::tempdir().unwrap();
+        let _ = unzip(&through_dir, dest.path(), None);
+        assert!(!outside.path().join("pwned").exists());
+
+        // A link already at the path (a previous archive) is replaced, not followed.
+        let dest = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path().join("other"), dest.path().join("file")).unwrap();
+        let file = archive(|z| {
+            z.start_file("file", SimpleFileOptions::default()).unwrap();
+            z.write_all(b"x").unwrap();
+        });
+        unzip(&file, dest.path(), None).unwrap();
+        assert!(!outside.path().join("other").exists());
+        assert_eq!(fs::read(dest.path().join("file")).unwrap(), b"x");
     }
 }

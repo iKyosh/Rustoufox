@@ -48,9 +48,13 @@ async function main() {
     options.handleSIGINT = false
     options.handleSIGTERM = false
     options.handleSIGHUP = false
-    const server = await playwright.firefox.launchServer(options)
+    // Before the launch, so a signal during it still closes the browser once
+    // it is up instead of killing Node and orphaning it.
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'])
         process.on(signal, () => process.stdin.destroy())
+    // A launcher gone meanwhile leaves no reader: close rather than crash on EPIPE.
+    process.stdout.on('error', () => process.stdin.destroy())
+    const server = await playwright.firefox.launchServer(options)
     process.stdout.write(JSON.stringify({ wsEndpoint: server.wsEndpoint() }) + '\n')
     await stdinClosed
     await server.close()

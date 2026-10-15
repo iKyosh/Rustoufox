@@ -324,7 +324,9 @@ fn finish_server(
                     continue;
                 }
             }
-            println!("{line}");
+            // Keep draining Node's stdout when ours is closed (`| head`):
+            // Node would crash on the EPIPE otherwise.
+            let _ = writeln!(std::io::stdout(), "{line}");
         }
     });
     match rx.recv_timeout(Duration::from_secs(180)) {
@@ -399,11 +401,17 @@ pub fn serve(launch: LaunchConfig, server: ServerOptions) -> Result<CamoufoxServ
 pub fn inspect(opts: LaunchOptions, url: Option<&str>) -> Result<()> {
     let launch = launch_options(opts)?;
     let payload = json!({ "launch": launch.to_playwright(), "url": url, "contextOptions": Value::Object(launch.context_defaults()) });
-    let status = Command::new(node_path()?)
+    let mut child = Command::new(node_path()?)
         .arg(script_file(data::INSPECT_JS)?)
         .arg(playwright_dir()?)
-        .arg(b64(&payload))
-        .status()?;
+        .stdin(Stdio::piped())
+        .spawn()?;
+    let written =
+        child.stdin.take().map(|mut stdin| stdin.write_all(&serde_json::to_vec(&payload)?).map_err(Error::from));
+    let status = child.wait()?;
+    if let Some(Err(e)) = written {
+        return Err(e);
+    }
     if !status.success() {
         return Err(Error::runtime(format!("the inspector exited with {status}")));
     }

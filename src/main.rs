@@ -269,7 +269,9 @@ fn pin_target(repo: &Value, pinned: &str, pinned_sha: Option<&str>) -> Option<Va
 fn install(repo: &Value, ver: &Value, confirm_prerelease: bool) -> Result<()> {
     let available = AvailableVersion::from_cache(ver, &s(repo, "repo"));
     let current = pkgman::installed_verstr().ok();
-    if current.as_deref() == Some(available.version.full_string().as_str()) {
+    // Up to date only when this very build (repo, version and asset) is the active one.
+    let target = multiversion::install_relative_path(&available);
+    if list_installed().iter().any(|v| v.is_active && v.relative_path() == target) {
         rprint("Camoufox binaries up to date!", Some("green"));
         rprint(&format!("Current version: v{}", available.version.full_string()), Some("green"));
         return Ok(());
@@ -300,8 +302,7 @@ fn fetch(version: Option<String>) -> Result<()> {
             1 => (RepoConfig::default_name(), parts[0].clone()),
             2 | 3 => (parts[0].clone(), parts[parts.len() - 1].clone()),
             _ => {
-                rprint("Format: version-build, repo/version-build, or repo/channel/version-build", Some("red"));
-                return Ok(());
+                return Err(Error::value("Format: version-build, repo/version-build, or repo/channel/version-build"));
             }
         };
         let found = repo_data(&cache, &repo)
@@ -309,14 +310,10 @@ fn fetch(version: Option<String>) -> Result<()> {
         if found.is_none() {
             for v in cache.get("incompatible").and_then(Value::as_array).into_iter().flatten() {
                 if s(v, "repo").eq_ignore_ascii_case(&repo) && vb(v) == spec.trim_start_matches('v') {
-                    rprint(
-                        &pkgman::incompatible_message(
-                            &Version::new(&s(v, "build"), v["version"].as_str()),
-                            v["interface"].as_i64().unwrap_or(1),
-                        ),
-                        Some("red"),
-                    );
-                    return Ok(());
+                    return Err(Error::UnsupportedVersion(pkgman::incompatible_message(
+                        &Version::new(&s(v, "build"), v["version"].as_str()),
+                        v["interface"].as_i64().unwrap_or(1),
+                    )));
                 }
             }
         }
@@ -332,8 +329,10 @@ fn fetch(version: Option<String>) -> Result<()> {
         let found =
             repo_data(&cache, &pin.repo_name).and_then(|r| pin_target(r, &pin.spec(), None).map(|v| (r.clone(), v)));
         if found.is_none() {
-            rprint(&format!("{}, the browser this release pairs with, is not in {}'s releases. Run 'rustoufox sync' and try again.", pin.tag, pin.repo_name), Some("red"));
-            return Ok(());
+            return Err(Error::runtime(format!(
+                "{}, the browser this release pairs with, is not in {}'s releases. Run 'rustoufox sync' and try again.",
+                pin.tag, pin.repo_name
+            )));
         }
         paired = true;
         (pin.repo_name, found)
@@ -352,21 +351,19 @@ fn fetch(version: Option<String>) -> Result<()> {
         (repo, found)
     };
     let Some((repo, ver)) = ver else {
-        rprint(
-            &format!("Version '{}' not found in cache. Run 'rustoufox sync'.", version.unwrap_or(repo_name)),
-            Some("red"),
-        );
-        return Ok(());
+        return Err(Error::runtime(format!(
+            "Version '{}' not found in cache. Run 'rustoufox sync'.",
+            version.unwrap_or(repo_name)
+        )));
     };
     if let Err(e) = install(&repo, &ver, !paired) {
-        let msg = e.to_string();
-        if msg.contains("404") {
-            rprint("Release not found (404). Asset may have been removed.", Some("red"));
-            rprint("Run 'rustoufox sync' to refresh available versions.", Some("yellow"));
-        } else {
-            rprint(&format!("Error: {msg}"), Some("red"));
+        if e.to_string().contains("404") {
+            return Err(Error::runtime(
+                "Release not found (404). Asset may have been removed. \
+                 Run 'rustoufox sync' to refresh available versions.",
+            ));
         }
-        return Ok(());
+        return Err(e);
     }
     if let Err(e) = geolocation::download_mmdb(None, true) {
         rprint(&format!("GeoIP database not downloaded: {e}"), Some("yellow"));
@@ -692,14 +689,15 @@ fn list_cmd(mode: ListMode, show_paths: bool) {
                 return;
             }
             let cache = load_repo_cache();
-            let installed: HashMap<String, InstalledVersion> =
-                list_installed().into_iter().map(|v| (v.version.build.clone(), v)).collect();
+            let installed: HashMap<(String, String), InstalledVersion> =
+                list_installed().into_iter().map(|v| ((v.repo_name.clone(), v.version.build.clone()), v)).collect();
             rprint("Available versions:\n", Some("yellow"));
             for r in cache.get("repos").and_then(Value::as_array).into_iter().flatten() {
                 println!("{}", style(&format!("{}/", s(r, "name")), Some("cyan"), true));
                 let list = latest_per_build(&versions(r));
+                let repo = s(r, "name").to_lowercase();
                 for (i, v) in list.iter().enumerate() {
-                    let inst = installed.get(&s(v, "build"));
+                    let inst = installed.get(&(repo.clone(), s(v, "build")));
                     let active = inst.is_some_and(|i| i.is_active);
                     let mut line = format!("    {}", if i == list.len() - 1 { "└── " } else { "├── " });
                     line.push_str(&style(&format!("v{}", vb(v)), active.then_some("green"), active));
@@ -906,12 +904,21 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Server { launch, port, ws_path, host } => {
             // A signal must still close the browser and the virtual display.
+            // Until the server is up (a browser download, the wait for the
+            // endpoint) it ends the launch at once: Node, in the same process
+            // group, gets the signal too and closes what it started.
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static SERVING: AtomicBool = AtomicBool::new(false);
             let (stop_tx, stop) = std::sync::mpsc::channel::<()>();
             ctrlc::set_handler(move || {
+                if !SERVING.load(Ordering::SeqCst) {
+                    std::process::exit(130);
+                }
                 let _ = stop_tx.send(());
             })
             .map_err(|e| Error::runtime(format!("cannot install the signal handler: {e}")))?;
             let mut server = rustoufox::launch_server(launch.into_options()?, ServerOptions { port, ws_path, host })?;
+            SERVING.store(true, Ordering::SeqCst);
             // Nothing else is drawn while the browser runs.
             rustoufox::fpgen::release_network();
             println!("Websocket endpoint: {}", style(server.ws_endpoint(), Some("yellow"), true));
@@ -933,27 +940,41 @@ fn run(cli: Cli) -> Result<()> {
             let config = rustoufox::launch_options(opts)?;
             let mut json = config.to_playwright();
             strip_caller_env(&mut json);
-            println!("{}", serde_json::to_string_pretty(&json)?);
-            Ok(())
+            // A reader that went away needs no error, as with `head`.
+            use std::io::Write;
+            match writeln!(std::io::stdout(), "{}", serde_json::to_string_pretty(&json)?) {
+                Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => Err(e.into()),
+                _ => Ok(()),
+            }
         }
     }
 }
 
-/// Keep in `env` only what rustoufox adds or changes, never the caller's own
-/// variables (tokens, credentials): the client merges it with its environment.
+/// What Firefox needs to start and open a window. Playwright's `env` replaces
+/// the browser's environment, so these stay for a client that does not merge.
+const BROWSER_ESSENTIAL_ENV: &[&str] =
+    &["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "HOME", "PATH", "TMPDIR", "LANG"];
+
+/// Keep in `env` only what rustoufox adds or changes, and what the browser
+/// cannot start without, never the caller's other variables (tokens,
+/// credentials): the client merges it with its environment.
 fn strip_caller_env(json: &mut serde_json::Value) {
     if let Some(env) = json.get_mut("env").and_then(|e| e.as_object_mut()) {
-        env.retain(|k, v| std::env::var(k).ok().as_deref() != v.as_str());
+        env.retain(|k, v| {
+            BROWSER_ESSENTIAL_ENV.contains(&k.as_str()) || std::env::var(k).ok().as_deref() != v.as_str()
+        });
     }
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    // Let `rustoufox … | head` end quietly, like `cat`, instead of panicking
-    // on EPIPE. `server` and `test` write to Node's stdin, where a closed pipe
-    // must stay an error rather than kill the launcher.
+    // Let the listing commands end quietly under `| head`, like `cat`, instead
+    // of panicking on EPIPE. Every other command keeps SIGPIPE ignored: they
+    // write to pipes of their own (Node's stdin, the Juggler probe of
+    // `options`) or to files (`fetch`), where a closed pipe must stay an
+    // error the command handles rather than kill it midway.
     #[cfg(unix)]
-    if !matches!(cli.command, Command::Server { .. } | Command::Test { .. }) {
+    if matches!(cli.command, Command::List { .. } | Command::Active | Command::Version | Command::Path) {
         unsafe {
             libc::signal(libc::SIGPIPE, libc::SIG_DFL);
         }
@@ -974,15 +995,18 @@ mod tests {
     #[test]
     fn options_env_leaves_out_the_caller_environment() {
         let (home, path) = (std::env::var("HOME").unwrap(), std::env::var("PATH").unwrap());
+        let (key, value) = std::env::vars().find(|(k, _)| !BROWSER_ESSENTIAL_ENV.contains(&k.as_str())).unwrap();
         let mut json = serde_json::json!({ "env": {
             "HOME": home,
             "PATH": format!("{path}:/extra"),
             "CAMOU_CONFIG_1": "{}",
+            key.clone(): value,
         }});
         strip_caller_env(&mut json);
         let env = json["env"].as_object().unwrap();
-        assert!(!env.contains_key("HOME"));
-        assert!(env.contains_key("PATH"), "a changed variable is kept");
+        assert!(!env.contains_key(&key), "an unchanged caller variable is left out");
+        assert!(env.contains_key("HOME"), "the browser cannot start without it");
+        assert!(env["PATH"].as_str().unwrap().ends_with(":/extra"), "a changed variable is kept");
         assert!(env.contains_key("CAMOU_CONFIG_1"));
     }
 }

@@ -131,10 +131,41 @@ fn disk_cache_path() -> std::path::PathBuf {
     crate::paths::install_dir().join("ip-cache.json")
 }
 
-/// The cache key of a proxy: a hash, so its credentials are not written to disk.
-fn disk_cache_key(proxy: Option<&str>) -> String {
+/// The cache key of a proxy: a hash keyed with a secret of this install, so
+/// its credentials are neither written to disk nor guessable from the digest.
+/// None when there is no secret to key it with: nothing is cached then.
+fn disk_cache_key(proxy: Option<&str>) -> Option<String> {
     use sha2::{Digest, Sha256};
-    hex::encode(Sha256::digest(proxy.unwrap_or("").as_bytes()))
+    let secret = disk_cache_secret()?;
+    let mut hasher = Sha256::new();
+    hasher.update(secret);
+    hasher.update(proxy.unwrap_or("").as_bytes());
+    Some(hex::encode(hasher.finalize()))
+}
+
+/// 32 random bytes in `ip-cache.key`, readable by its owner only.
+fn disk_cache_secret() -> Option<Vec<u8>> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = crate::paths::install_dir().join("ip-cache.key");
+    if let Some(secret) = std::fs::read(&path).ok().filter(|b| b.len() == 32) {
+        return Some(secret);
+    }
+    let mut secret = vec![0u8; 32];
+    getrandom::getrandom(&mut secret).ok()?;
+    std::fs::create_dir_all(crate::paths::install_dir()).ok()?;
+    let _ = std::fs::remove_file(&path);
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .and_then(|mut f| f.write_all(&secret));
+    match written {
+        Ok(()) => Some(secret),
+        // Another process made it first: use its secret.
+        Err(_) => std::fs::read(&path).ok().filter(|b| b.len() == 32),
+    }
 }
 
 fn now_secs() -> u64 {
@@ -150,18 +181,18 @@ fn read_disk_cache() -> serde_json::Map<String, serde_json::Value> {
 }
 
 fn cached_on_disk(proxy: Option<&str>, ttl: u64) -> Option<String> {
-    let entry = read_disk_cache().remove(&disk_cache_key(proxy))?;
+    let entry = read_disk_cache().remove(&disk_cache_key(proxy)?)?;
     let at = entry["at"].as_u64()?;
     let ip = entry["ip"].as_str()?;
     (now_secs().saturating_sub(at) < ttl && validate_ip(ip).is_ok()).then(|| ip.to_string())
 }
 
 fn store_on_disk(proxy: Option<&str>, ip: &str, ttl: u64) {
+    let Some(key) = disk_cache_key(proxy) else { return };
     let now = now_secs();
     let mut cache = read_disk_cache();
     cache.retain(|_, e| e["at"].as_u64().is_some_and(|at| now.saturating_sub(at) < ttl));
-    cache.insert(disk_cache_key(proxy), serde_json::json!({ "ip": ip, "at": now }));
-    let _ = std::fs::create_dir_all(crate::paths::install_dir());
+    cache.insert(key, serde_json::json!({ "ip": ip, "at": now }));
     let _ = crate::pkgman::write_atomic(&disk_cache_path(), serde_json::Value::Object(cache).to_string().as_bytes());
 }
 
@@ -228,10 +259,14 @@ mod tests {
 
     #[test]
     fn disk_cache_key_hides_credentials() {
-        let key = disk_cache_key(Some("http://user:secret@proxy.example.com:8080"));
+        let url = "http://user:secret@proxy.example.com:8080";
+        let key = disk_cache_key(Some(url)).unwrap();
         assert_eq!(key.len(), 64);
-        assert!(!key.contains("secret"));
-        assert_ne!(key, disk_cache_key(None));
+        assert_eq!(Some(&key), disk_cache_key(Some(url)).as_ref(), "the secret is kept between calls");
+        assert_ne!(Some(&key), disk_cache_key(None).as_ref());
+        // Unsalted, a known host and user would let the password be guessed offline.
+        use sha2::{Digest, Sha256};
+        assert_ne!(key, hex::encode(Sha256::digest(url.as_bytes())));
     }
 
     #[test]

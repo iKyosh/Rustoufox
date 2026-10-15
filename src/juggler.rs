@@ -655,6 +655,30 @@ fn write_user_js(dir: &std::path::Path, prefs: &Map<String, Value>) -> Result<()
     Ok(())
 }
 
+/// A pipe whose ends are close-on-exec from the start: set afterwards, a
+/// child forked meanwhile by another thread would inherit them and keep the
+/// pipe open past its owner's close.
+pub(crate) fn cloexec_pipe() -> std::io::Result<[i32; 2]> {
+    let mut fds = [0; 2];
+    #[cfg(target_os = "linux")]
+    let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+    // macOS has no pipe2; the window stays open there.
+    #[cfg(not(target_os = "linux"))]
+    let rc = unsafe {
+        let rc = libc::pipe(fds.as_mut_ptr());
+        if rc == 0 {
+            for fd in fds {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
+        }
+        rc
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(fds)
+}
+
 /// Spawn the browser with the Juggler pipe on fds 3 (browser reads) and 4
 /// (browser writes).
 fn spawn_with_pipe(mut cmd: Command, pin: Option<Vec<usize>>) -> Result<(Child, Arc<Connection>)> {
@@ -662,14 +686,8 @@ fn spawn_with_pipe(mut cmd: Command, pin: Option<Vec<usize>>) -> Result<(Child, 
     use std::os::unix::process::CommandExt;
 
     fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
-        let mut fds = [0; 2];
-        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        for fd in fds {
-            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
-        }
-        Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+        let [r, w] = cloexec_pipe()?;
+        Ok(unsafe { (OwnedFd::from_raw_fd(r), OwnedFd::from_raw_fd(w)) })
     }
 
     let (browser_in, to_browser) = pipe()?;

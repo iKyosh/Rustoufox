@@ -70,10 +70,12 @@ The JSON printed by `options` maps to the client's arguments:
 | `proxy` (`server`, `username`, `password`) | `proxy` (same keys) | `setProxy` / `Proxy` |
 
 Any other key comes from `LaunchOptions::extra` and keeps Playwright's
-camelCase name. `env` holds only the variables rustoufox adds or changes, not
-your own environment: merge it with yours (`System.getenv()` in Java,
+camelCase name. `env` holds the variables rustoufox adds or changes, plus the
+few the browser cannot start without (`DISPLAY`, `HOME`, `PATH`…), not the rest
+of your environment: merge it with yours (`System.getenv()` in Java,
 `Environment.GetEnvironmentVariables()` in .NET), since Playwright's `env`
-replaces the browser's environment.
+replaces the browser's environment. stdout carries only the JSON; warnings and
+download progress go to stderr.
 
 ```python
 import json, os, re, subprocess

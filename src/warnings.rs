@@ -50,6 +50,12 @@ pub fn emit(kind: WarningKind, message: impl Into<String>) {
         WarningKind::Runtime => "RuntimeWarning",
         WarningKind::Future => "FutureWarning",
     };
+    // One launch says the same thing once.
+    let repeated = COLLECTED
+        .with(|c| c.borrow().as_ref().is_some_and(|list| list.iter().any(|w| w.kind == kind && w.message == message)));
+    if repeated {
+        return;
+    }
     if std::env::var_os("RUSTOUFOX_QUIET_WARNINGS").is_none() {
         eprintln!("{label}: {message}");
     }
