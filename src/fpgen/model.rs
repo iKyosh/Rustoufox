@@ -76,16 +76,23 @@ pub fn ensure_model(force: bool) -> Result<PathBuf> {
     let dir = model_dir();
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pin = pin();
-    if force || !is_pinned(&dir) {
+    let installed = force || !is_pinned(&dir);
+    if installed {
         install(&dir, &pin)?;
     }
-    fs::write(dir.join(STAMP), format!("{}\n", pin.sha256)).map_err(|e| {
-        Error::FpgenModel(format!(
-            "Cannot write fpgen's model directory {}: {e}. Install the model once as the account \
-             that owns it, e.g. with `rustoufox fetch`.",
-            dir.display()
-        ))
-    })?;
+    // The stamp only saves hashing the archive next time: a read-only model
+    // another account installed (a container image) is fine without it.
+    if read_stamp(&dir.join(STAMP)).as_deref() != Some(pin.sha256.as_str()) {
+        if let Err(e) = fs::write(dir.join(STAMP), format!("{}\n", pin.sha256)) {
+            if installed {
+                return Err(Error::FpgenModel(format!(
+                    "Cannot write fpgen's model directory {}: {e}. Install the model once as the account \
+                     that owns it, e.g. with `rustoufox fetch`.",
+                    dir.display()
+                )));
+            }
+        }
+    }
     decompress_values(&dir, &pin)?;
     Ok(dir)
 }
@@ -141,7 +148,7 @@ fn decompress_values(dir: &Path, pin: &ModelPin) -> Result<()> {
         return Ok(());
     }
     if dat.exists() && &sha256_file(&dat)? == expected {
-        fs::write(dir.join(VALUES_STAMP), format!("{expected}\n"))?;
+        let _ = fs::write(dir.join(VALUES_STAMP), format!("{expected}\n"));
         return Ok(());
     }
     let src = fs::File::open(dir.join("values.dat.zst"))?;

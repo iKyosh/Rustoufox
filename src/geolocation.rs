@@ -242,8 +242,16 @@ pub fn get_geolocation(ip: &str, geoip_db: Option<&str>) -> Result<Geolocation> 
     };
     warn_if_deprecated(&source);
     let path = mmdb_path(version, &source);
-    if !path.exists() || needs_update(&source) {
+    if !path.exists() {
         download_mmdb(geoip_db, geoip_db.is_none())?;
+    } else if needs_update(&source) {
+        // The database on disk still works: a failed refresh (offline, GitHub
+        // down) only warns, and waits a day before the next try.
+        if let Err(e) = download_mmdb(geoip_db, geoip_db.is_none()) {
+            crate::warnings::runtime(format!("Could not refresh the GeoIP database ({e}); using the one on disk."));
+            let _ =
+                fs::File::options().append(true).open(&path).and_then(|f| f.set_modified(std::time::SystemTime::now()));
+        }
     }
     let reader = maxminddb::Reader::open_mmap(&path)?;
     let addr: IpAddr = ip.parse().map_err(|_| Error::InvalidIp(format!("Invalid IP address: {ip}")))?;

@@ -324,6 +324,27 @@ fn get_env_vars(config: &Config, target_os: &str, executable: Option<&Path>) -> 
     Ok(env)
 }
 
+/// The browser's environment: the base one with the generated variables on
+/// top. A CAMOU_CONFIG_n or CAMOU_PREFS_n left over from an earlier launch
+/// would be joined to this launch's chunks, so it is emptied.
+fn merge_generated_env(
+    mut env: BTreeMap<String, String>,
+    generated: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let is_chunk = |k: &str| {
+        ["CAMOU_CONFIG_", "CAMOU_PREFS_"]
+            .iter()
+            .any(|p| k.strip_prefix(p).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))
+    };
+    for (k, v) in env.iter_mut() {
+        if is_chunk(k) && !generated.contains_key(k) {
+            v.clear();
+        }
+    }
+    env.extend(generated);
+    env
+}
+
 /// Prefs the browser applies at startup (CAMOU_PREFS_n), ASCII-only.
 fn get_pref_env_vars(prefs: &Map<String, Value>) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
@@ -392,11 +413,11 @@ pub fn validate_config(config: &Config, executable: Option<&Path>) -> Result<()>
     let props = load_properties(executable)?;
     for (key, value) in config {
         let Some(entry) = props.get(key) else {
-            println!("Skipping unknown patch {key} : {value}");
+            eprintln!("Skipping unknown patch {key} : {value}");
             continue;
         };
         if let Some(removed) = entry.get("removed") {
-            println!("Skipping {key}: removed in {}, it has no effect", removed.as_str().unwrap_or(""));
+            eprintln!("Skipping {key}: removed in {}, it has no effect", removed.as_str().unwrap_or(""));
             continue;
         }
         let expected = entry["type"].as_str().unwrap_or("");
@@ -907,7 +928,15 @@ fn build(opts: LaunchOptions) -> Result<LaunchConfig> {
 
     let probe_exe = browser_binary.to_string_lossy().to_string();
     let probe_env = env.clone();
-    let probe = || host_rendering::host_gpu(&probe_exe, headless, &probe_env);
+    // One probe per launch, failure included: a probe that hangs must not be
+    // paid again for the host identity below.
+    let probed = std::cell::OnceCell::new();
+    let probe = || {
+        probed
+            .get_or_init(|| host_rendering::host_gpu(&probe_exe, headless, &probe_env).map_err(|e| e.to_string()))
+            .clone()
+            .map_err(Error::runtime)
+    };
     let named_gpu = webgl_config.is_some()
         || (str_of(&config, "webGl:vendor").is_some() && str_of(&config, "webGl:renderer").is_some());
     let (cover_canvas, host) = plan_rendering(&target_os, canvas_noise, named_gpu, block_webgl, &probe)?;
@@ -947,7 +976,7 @@ fn build(opts: LaunchOptions) -> Result<LaunchConfig> {
     let incoherent = coherence::apply(&mut config, &target_os);
     if debug {
         for v in &incoherent {
-            println!("Incoherent identity ({}): {}", v.rule, v.detail);
+            eprintln!("Incoherent identity ({}): {}", v.rule, v.detail);
         }
     }
 
@@ -964,15 +993,15 @@ fn build(opts: LaunchOptions) -> Result<LaunchConfig> {
         merge_into(&mut firefox_user_prefs, launcher_constants().cache_prefs.clone());
     }
     if debug {
-        println!("[DEBUG] Config:\n{}", serde_json::to_string_pretty(&config)?);
+        eprintln!("[DEBUG] Config:\n{}", serde_json::to_string_pretty(&config)?);
     }
 
     warn_if_executable_predates_playwright(executable_path.as_deref());
     validate_config(&config, executable_path.as_deref())?;
 
-    let mut env_vars = get_env_vars(&config, &target_os, executable_path.as_deref())?;
-    env_vars.extend(get_pref_env_vars(&firefox_user_prefs));
-    env_vars.extend(env);
+    let mut generated = get_env_vars(&config, &target_os, executable_path.as_deref())?;
+    generated.extend(get_pref_env_vars(&firefox_user_prefs));
+    let env_vars = merge_generated_env(env, generated);
 
     // Contexts of a browser without the canvas placeholder claim the host's OS and GPU.
     let host_identity = match (canvas_noise, host_os_key()) {
@@ -1066,6 +1095,30 @@ pub fn new_context(launch: &LaunchConfig, browser_version: &str, mut opts: NewCo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_env_wins_over_stale_chunks() {
+        let base: BTreeMap<String, String> = [
+            ("CAMOU_CONFIG_1", "old"),
+            ("CAMOU_CONFIG_2", "old"),
+            ("CAMOU_PREFS_3", "old"),
+            ("FONTCONFIG_FILE", "/etc/fonts/fonts.conf"),
+            ("HOME", "/home/u"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let generated: BTreeMap<String, String> = [("CAMOU_CONFIG_1", "new"), ("FONTCONFIG_FILE", "/tmp/fc.conf")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let env = merge_generated_env(base, generated);
+        assert_eq!(env["CAMOU_CONFIG_1"], "new");
+        assert_eq!(env["CAMOU_CONFIG_2"], "");
+        assert_eq!(env["CAMOU_PREFS_3"], "");
+        assert_eq!(env["FONTCONFIG_FILE"], "/tmp/fc.conf");
+        assert_eq!(env["HOME"], "/home/u");
+    }
 
     #[test]
     fn env_chunks() {

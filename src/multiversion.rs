@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 
 use crate::browser_pin;
 use crate::error::Result;
-use crate::paths::{install_dir, rprint, style};
+use crate::paths::{eprint_status, install_dir, rprint, style};
 use crate::pkgman::{self, AvailableVersion, RepoConfig, Version};
 
 pub fn browsers_dir() -> PathBuf {
@@ -35,7 +35,7 @@ pub fn remove_incompatible_data() -> Result<()> {
         // Anything else in the directory (fpgen's model, addons, GeoIP) is
         // re-downloaded on demand; only an unversioned browser is in the way.
         if dir.join("version.json").exists() {
-            rprint("Cleaning old data...", Some("yellow"));
+            eprint_status("Cleaning old data...", Some("yellow"));
             fs::remove_dir_all(dir)?;
         }
     }
@@ -303,15 +303,22 @@ fn chmod_755(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Install a build to `browsers/<repo>/<version>-<build>[-<sha8>]` and make it active.
-pub fn install_versioned(available: &AvailableVersion, replace: bool) -> Result<bool> {
-    let repo_name = repo_name_for(&available.github_repo);
+/// Where a build installs, relative to the install directory:
+/// `browsers/<repo>/<version>-<build>[-<sha8>]`.
+pub fn install_relative_path(available: &AvailableVersion) -> String {
     let folder = version_folder_name(
         available.version.version.as_deref().unwrap_or(""),
         &available.version.build,
         &available.sha8(),
     );
-    let install_path = browsers_dir().join(&repo_name).join(&folder);
+    format!("browsers/{}/{folder}", repo_name_for(&available.github_repo))
+}
+
+/// Install a build to [`install_relative_path`] and make it active.
+pub fn install_versioned(available: &AvailableVersion, replace: bool) -> Result<bool> {
+    let repo_name = repo_name_for(&available.github_repo);
+    let relative = install_relative_path(available);
+    let install_path = install_dir().join(&relative);
     let verstr = available.version.full_string();
 
     if install_path.join("version.json").exists() {
@@ -323,8 +330,8 @@ pub fn install_versioned(available: &AvailableVersion, replace: bool) -> Result<
                 .map(|v| v.changes(available))
                 .unwrap_or_default();
             let change_msg = if changes.is_empty() { String::new() } else { format!(" ({})", changes.join(", ")) };
-            rprint(&format!("Version v{verstr} already installed{change_msg}."), Some("yellow"));
-            rprint(
+            eprint_status(&format!("Version v{verstr} already installed{change_msg}."), Some("yellow"));
+            eprint_status(
                 if change_msg.is_empty() {
                     "Use --replace to reinstall."
                 } else {
@@ -332,38 +339,35 @@ pub fn install_versioned(available: &AvailableVersion, replace: bool) -> Result<
                 },
                 Some("yellow"),
             );
-            if load_config().get("active_version").is_none_or(Value::is_null) {
-                set_active(&format!("browsers/{repo_name}/{folder}"))?;
-            }
+            set_active(&relative)?;
             return Ok(false);
         }
-        rprint(&format!("Replacing: {}", install_path.display()), Some("yellow"));
+        eprint_status(&format!("Replacing: {}", install_path.display()), Some("yellow"));
         fs::remove_dir_all(&install_path)?;
     }
 
     let result = (|| -> Result<()> {
         fs::create_dir_all(&install_path)?;
-        rprint(&format!("Downloading package: {}", available.url), None);
+        eprint_status(&format!("Downloading package: {}", available.url), None);
         let mut tmp = tempfile::tempfile()?;
         let actual = pkgman::webdl_to(&available.url, Some("Downloading Camoufox"), true, &mut tmp)?;
         pkgman::verify_sha256(&actual, available.sha256.as_deref(), &format!("Camoufox v{verstr}"))?;
-        rprint(&format!("Extracting Camoufox: {}", install_path.display()), None);
+        eprint_status(&format!("Extracting Camoufox: {}", install_path.display()), None);
         use std::io::Seek;
         tmp.rewind()?;
         pkgman::unzip_from(std::io::BufReader::new(tmp), &install_path, Some("Extracting"))?;
         fs::write(install_path.join("version.json"), serde_json::to_vec(&available.to_metadata())?)?;
         chmod_755(&install_path)?;
-        set_active(&format!("browsers/{repo_name}/{folder}"))?;
+        set_active(&relative)?;
         fs::write(compat_flag(), b"")?;
         Ok(())
     })();
     if let Err(e) = result {
-        rprint(&format!("Error: {e}"), Some("red"));
         let _ = fs::remove_dir_all(&install_path);
         return Err(e);
     }
-    rprint(&format!("\nCamoufox v{verstr} installed."), Some("green"));
-    rprint(&format!("Path: {}", install_path.display()), Some("green"));
+    eprint_status(&format!("\nCamoufox v{verstr} installed."), Some("green"));
+    eprint_status(&format!("Path: {}", install_path.display()), Some("green"));
     Ok(true)
 }
 
@@ -372,7 +376,7 @@ pub fn remove_version(path: &Path) -> Result<bool> {
     if !path.exists() {
         return Ok(false);
     }
-    rprint(&format!("Removing: {}", path.display()), None);
+    eprint_status(&format!("Removing: {}", path.display()), None);
     fs::remove_dir_all(path)?;
     if let Some(parent) = path.parent() {
         if parent != browsers_dir() && fs::read_dir(parent).map(|mut d| d.next().is_none()).unwrap_or(false) {

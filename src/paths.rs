@@ -132,7 +132,11 @@ pub fn launcher_constants() -> &'static LauncherConstants {
 /// ANSI-styled text, plain when stdout is not a terminal or NO_COLOR is set.
 pub fn style(text: &str, fg: Option<&str>, bold: bool) -> String {
     use std::io::IsTerminal;
-    if !std::io::stdout().is_terminal() || std::env::var_os("NO_COLOR").is_some() {
+    paint(text, fg, bold, std::io::stdout().is_terminal())
+}
+
+fn paint(text: &str, fg: Option<&str>, bold: bool, terminal: bool) -> String {
+    if !terminal || std::env::var_os("NO_COLOR").is_some() {
         return text.to_string();
     }
     let mut codes: Vec<&str> = Vec::new();
@@ -161,6 +165,15 @@ pub fn style(text: &str, fg: Option<&str>, bold: bool) -> String {
 }
 
 /// Print a bold, optionally coloured message, as the Python twin's `rprint`.
+/// A closed stdout (`rustoufox … | head`) is not an error worth stopping for.
 pub fn rprint(msg: &str, fg: Option<&str>) {
-    println!("{}", style(msg, fg, true));
+    use std::io::Write;
+    let _ = writeln!(std::io::stdout(), "{}", style(msg, fg, true));
+}
+
+/// [`rprint`] on stderr, for progress and diagnostics the library prints:
+/// stdout may carry the machine-readable output of `rustoufox options`.
+pub fn eprint_status(msg: &str, fg: Option<&str>) {
+    use std::io::IsTerminal;
+    eprintln!("{}", paint(msg, fg, true, std::io::stderr().is_terminal()));
 }

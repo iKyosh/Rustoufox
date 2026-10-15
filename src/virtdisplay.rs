@@ -89,12 +89,9 @@ impl VirtualDisplay {
 
         let xvfb = which::which("Xvfb")
             .map_err(|_| Error::VirtualDisplay("Please install Xvfb to use headless mode.".into()))?;
-        let mut fds = [0i32; 2];
-        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        let (read_fd, write_fd) = (fds[0], fds[1]);
-        unsafe { libc::fcntl(read_fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+        // Both ends close-on-exec, so no other child can inherit them; Xvfb's
+        // end is made inheritable in Xvfb's own process, after the fork.
+        let [read_fd, write_fd] = crate::juggler::cloexec_pipe()?;
 
         let mut cmd = Command::new(&xvfb);
         cmd.arg("-displayfd").arg(write_fd.to_string()).args(self.xvfb_args());
@@ -105,8 +102,11 @@ impl VirtualDisplay {
         // Mesa software GLX: the GPU is not used anyway.
         cmd.env("__GLX_VENDOR_LIBRARY_NAME", "mesa").env("LIBGL_ALWAYS_SOFTWARE", "1");
         unsafe {
-            cmd.pre_exec(|| {
+            cmd.pre_exec(move || {
                 libc::setsid();
+                if libc::fcntl(write_fd, libc::F_SETFD, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 Ok(())
             });
         }
