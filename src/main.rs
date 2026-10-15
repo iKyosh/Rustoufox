@@ -1,6 +1,7 @@
 //! `rustoufox`: the command line of the Rust Camoufox launcher.
 
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -62,7 +63,12 @@ enum Command {
         spoof_arch: Option<SpoofArch>,
     },
     /// Install the paired build (or the chosen one), or a specific VERSION.
-    Fetch { version: Option<String> },
+    Fetch {
+        version: Option<String>,
+        /// Install a prerelease without asking (naming VERSION already counts as consent).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
     /// Pin a build (official/stable/134.0.2-beta.20) or follow a channel (official/stable).
     Set {
         specifier: Option<String>,
@@ -278,9 +284,17 @@ fn install(repo: &Value, ver: &Value, confirm_prerelease: bool) -> Result<()> {
     }
     if available.is_prerelease && confirm_prerelease {
         rprint(&format!("Warning: v{} is a prerelease version!", available.version.full_string()), Some("yellow"));
-        if !Confirm::new().with_prompt("Continue with prerelease installation?").interact().unwrap_or(false) {
-            rprint("Installation cancelled.", Some("red"));
-            return Ok(());
+        if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+            return Err(Error::value(
+                "this build is a prerelease: pass --yes (or name the version) to install it without a terminal",
+            ));
+        }
+        let accepted = Confirm::new()
+            .with_prompt("Continue with prerelease installation?")
+            .interact()
+            .map_err(|e| Error::runtime(format!("prerelease confirmation failed: {e}")))?;
+        if !accepted {
+            return Err(Error::runtime("installation cancelled"));
         }
     }
     let action = if current.is_some() { "Installing" } else { "Fetching" };
@@ -290,7 +304,9 @@ fn install(repo: &Value, ver: &Value, confirm_prerelease: bool) -> Result<()> {
     Ok(())
 }
 
-fn fetch(version: Option<String>) -> Result<()> {
+fn fetch(version: Option<String>, yes: bool) -> Result<()> {
+    // Typing the exact build is consent enough; the prompt guards channel and pin follows.
+    let ask = !yes && version.is_none();
     multiversion::remove_incompatible_data()?;
     do_sync(None, None)?;
     let cache = load_repo_cache();
@@ -356,7 +372,7 @@ fn fetch(version: Option<String>) -> Result<()> {
             version.unwrap_or(repo_name)
         )));
     };
-    if let Err(e) = install(&repo, &ver, !paired) {
+    if let Err(e) = install(&repo, &ver, ask && !paired) {
         if e.to_string().contains("404") {
             return Err(Error::runtime(
                 "Release not found (404). Asset may have been removed. \
@@ -875,7 +891,7 @@ fn run(cli: Cli) -> Result<()> {
             });
             do_sync(os, arch)
         }
-        Command::Fetch { version } => fetch(version),
+        Command::Fetch { version, yes } => fetch(version, yes),
         Command::Set { specifier, geoip, paired } => set_cmd(specifier, geoip, paired),
         Command::Active => {
             active_cmd();

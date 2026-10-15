@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::addons::{self, DefaultAddons};
 use crate::coherence::{self, int, Config};
 use crate::display;
-use crate::error::{Error, Result};
+use crate::error::{Error, IoContext, Result};
 use crate::fingerprints::{self as fp, Screen};
 use crate::geolocation;
 use crate::host_rendering::{self, Gpu};
@@ -275,17 +275,48 @@ fn generate_fontconfig(fontconfig_path: &Path, fonts_dir: &Path, os_dir: &str) -
         let per_os = fonts_dir.join(os_dir);
         scan_dirs.push(if per_os.is_dir() { per_os } else { fonts_dir.to_path_buf() });
     }
-    let conf = fs::read_to_string(fontconfig_path.join("fonts.conf"))?;
-    let dirs: Vec<String> = scan_dirs.iter().map(|d| format!("<dir>{}</dir>", d.display())).collect();
-    let conf = conf.replace("<dir prefix=\"cwd\">fonts</dir>", &dirs.join("\n\t"));
-    let cache = install_dir().join("fontconfig");
-    fs::create_dir_all(&cache)?;
+    let template = fontconfig_path.join("fonts.conf");
+    let conf = fs::read_to_string(&template).at(&template)?;
+    let dir_tags: Vec<String> = scan_dirs.iter().map(|d| format!("<dir>{}</dir>", d.display())).collect();
+    let conf = conf.replace("<dir prefix=\"cwd\">fonts</dir>", &dir_tags.join("\n\t"));
+    // The install directory first; a per-user cache when another account owns
+    // it read-only (one account installs, service accounts launch).
+    let caches = [
+        install_dir().join("fontconfig"),
+        dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("rustoufox").join("fontconfig"),
+    ];
+    cached_conf(&conf, &caches)
+}
+
+/// The config's file in the first cache that has it, else written to the first writable one.
+fn cached_conf(conf: &str, caches: &[PathBuf]) -> Result<PathBuf> {
     let hash = hex::encode(Sha256::digest(conf.as_bytes()));
-    let out = cache.join(format!("fonts-{}.conf", &hash[..12]));
-    if !out.exists() {
-        fs::write(&out, conf)?;
+    let name = format!("fonts-{}.conf", &hash[..12]);
+    if let Some(out) = caches.iter().map(|d| d.join(&name)).find(|p| p.is_file()) {
+        return Ok(out);
     }
-    Ok(out)
+    let mut first_err = None;
+    for cache in caches {
+        let out = cache.join(&name);
+        match fs::create_dir_all(cache).at(cache).and_then(|_| write_atomic(&out, conf)) {
+            Ok(()) => return Ok(out),
+            Err(e) => {
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+    Err(first_err.unwrap_or_else(|| Error::runtime("no directory for the fontconfig cache")))
+}
+
+/// Writes through a temporary file so a concurrent launch never reads a half-written config.
+fn write_atomic(out: &Path, text: &str) -> Result<()> {
+    let tmp = out.with_extension(format!("conf.{}.tmp", std::process::id()));
+    fs::write(&tmp, text).at(&tmp)?;
+    fs::rename(&tmp, out)
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
+        .at(out)
 }
 
 fn chunk_env(prefix: &str, data: &str, out: &mut BTreeMap<String, String>) {
@@ -362,7 +393,7 @@ fn load_properties(executable: Option<&Path>) -> Result<Map<String, Value>> {
         None => pkgman::get_path("properties.json").ok(),
     };
     let text = match path.filter(|p| p.exists()) {
-        Some(p) => fs::read_to_string(p)?,
+        Some(p) => fs::read_to_string(&p).at(&p)?,
         None => crate::paths::data::PROPERTIES.to_string(),
     };
     let list: Vec<Value> = serde_json::from_str(&text)?;
@@ -1094,6 +1125,24 @@ pub fn new_context(launch: &LaunchConfig, browser_version: &str, mut opts: NewCo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fontconfig_cache_falls_back_when_install_dir_is_not_writable() {
+        let tmp = std::env::temp_dir().join(format!("rustoufox-fc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        // A directory under a regular file can never be created, even as root.
+        let blocker = tmp.join("blocker");
+        std::fs::write(&blocker, "").unwrap();
+        let caches = [blocker.join("fontconfig"), tmp.join("user")];
+        let out = super::cached_conf("<fontconfig/>", &caches).unwrap();
+        assert!(out.starts_with(tmp.join("user")));
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "<fontconfig/>");
+        // Neither writable: the error names the path.
+        let err = super::cached_conf("<other/>", &caches[..1]).unwrap_err().to_string();
+        assert!(err.contains("blocker"), "{err}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     use super::*;
 
     #[test]

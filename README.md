@@ -142,7 +142,7 @@ default GeoIP database 116 MB and fpgen's decompressed `values.dat` about
 
 | Command | What it does |
 |---|---|
-| `rustoufox fetch [VERSION]` | Install the paired build (or the chosen channel's latest), or `VERSION`. Syncs first. |
+| `rustoufox fetch [VERSION] [-y]` | Install the paired build (or the chosen channel's latest), or `VERSION`. Syncs first. A prerelease reached through a channel asks first; `-y`, or naming `VERSION`, installs it without asking. |
 | `rustoufox sync [--spoof-os ...] [--spoof-arch ...]` | Refresh the list of available builds from every repository. |
 | `rustoufox set [SPEC] [--geoip] [--release]` | Pin a build (`official/stable/156.0.1-beta.38`), follow a channel (`official/stable`), pick interactively, choose the GeoIP source, or go back to the paired build. |
 | `rustoufox active` | Print the active build. |
