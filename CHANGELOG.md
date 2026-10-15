@@ -1,15 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.4
 
 - `rustoufox options` prints in `env` only the variables rustoufox adds or
-  changes, no longer the caller's whole environment (tokens, credentials).
-  Merge it with your own environment before passing it to Playwright, whose
-  `env` replaces the browser's (#20).
+  changes, plus the few the browser cannot start without (`DISPLAY`, `HOME`,
+  `PATH`, `LANG`…), no longer the caller's whole environment (tokens,
+  credentials). Merge it with your own environment before passing it to
+  Playwright, whose `env` replaces the browser's (#20, #24).
+- `rustoufox options` writes only the JSON on stdout: warnings and download
+  progress go to stderr (#24).
 - `rustoufox version | head` and other closed pipes end quietly instead of
-  panicking with exit code 101 (#21).
-- `rustoufox server` handles Ctrl+C or SIGTERM at once and waits for Node in
-  10 ms steps instead of 100 ms: about 0.15 s less per close (#22).
+  panicking with exit code 101 (#21, #24).
+- `rustoufox server` handles Ctrl+C or SIGTERM at once, a launch in progress
+  included, and waits for Node in 10 ms steps instead of 100 ms: about 0.15 s
+  less per close (#22, #24). A closed stdout no longer crashes it.
+- The generated `CAMOU_CONFIG_n`, `CAMOU_PREFS_n` and `FONTCONFIG_FILE` win
+  over inherited ones, and chunks left over from a larger config are emptied
+  (#24).
+- A failed weekly GeoIP refresh warns and keeps the database on disk instead
+  of failing the launch (#24).
+- `rustoufox fetch` exits non-zero when it fails, and says "up to date" only
+  when the same repo, version and asset is active (#24). `rustoufox list all`
+  matches installed builds by repo and build.
+- Archives extract symlinks as links, and a member that would be written
+  through a symlink is refused (#24).
+- The IP cache (`RUSTOUFOX_IP_CACHE_TTL`) keys its entries with a secret of
+  the install (`ip-cache.key`), so proxy credentials are neither on disk nor
+  guessable from the cache (#24).
+- A read-only fpgen model installed by another account is accepted (#24).
 
 ## 0.1.0-beta.3
 
