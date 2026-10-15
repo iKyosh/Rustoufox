@@ -119,7 +119,7 @@ server. `RUSTOUFOX_JUGGLER_DEBUG=1` shows the browser's own output.
 ## Install
 
 ```bash
-cargo install --git https://github.com/iKyosh/Rustoufox --tag v0.1.0-beta.3
+cargo install --git https://github.com/iKyosh/Rustoufox --tag v0.1.0-beta.4
 rustoufox fetch
 ```
 
