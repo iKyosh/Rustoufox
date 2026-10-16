@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0-beta.5
+
+- `rustoufox fetch` no longer needs a terminal to install a prerelease:
+  `-y`/`--yes`, or naming the exact `VERSION`, installs it without asking.
+  Without a terminal and without either, it fails with a message instead of
+  pretending to succeed, and a cancelled prompt now exits non-zero (#27, #28).
+- An install directory owned read-only by another account works: the
+  fontconfig file goes to the per-user cache (`~/.cache/rustoufox/fontconfig`
+  on Linux) when the install directory is not writable, and is written
+  atomically so concurrent launches never read half of it (#26, #28).
+- I/O errors on a known file name the path instead of a bare
+  `Permission denied (os error 13)` (#26, #28).
+
 ## 0.1.0-beta.4
 
 - `rustoufox options` prints in `env` only the variables rustoufox adds or
